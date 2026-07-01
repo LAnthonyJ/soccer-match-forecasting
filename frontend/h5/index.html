@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>世界杯预测系统</title>
+  <link rel="stylesheet" href="/h5/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div>
+        <div class="brand">世界杯预测系统</div>
+        <div class="subbrand">概率、比分、大小球、赛前信号</div>
+      </div>
+      <button id="accountButton" class="icon-button" aria-label="我的">我的</button>
+    </header>
+
+    <main id="app" class="main-view">
+      <section class="loading-view">正在加载...</section>
+    </main>
+
+    <nav class="bottom-nav">
+      <button data-route="#/search">预测</button>
+      <button data-route="#/matches">比赛</button>
+      <button data-route="#/account">我的</button>
+    </nav>
+  </div>
+  <script type="module" src="/h5/app.js"></script>
+</body>
+</html>

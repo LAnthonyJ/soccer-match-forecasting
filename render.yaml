@@ -1,0 +1,41 @@
+services:
+  - type: web
+    name: worldcup-predict
+    env: docker
+    plan: starter
+    healthCheckPath: /health/live
+    disk:
+      name: worldcup-predict-data
+      mountPath: /app/data
+      sizeGB: 1
+    envVars:
+      - key: APP_ENV
+        value: prod
+      - key: DATA_DIR
+        value: /app/data
+      - key: APP_BASE_URL
+        sync: false
+      - key: ENABLE_H5
+        value: "true"
+      - key: FLASK_DEBUG
+        value: "0"
+      - key: ENABLE_DEV_PAYMENT_WEBHOOK
+        value: "false"
+      - key: PAYMENT_PROVIDER
+        value: mock
+      - key: PAYMENT_RETURN_URL
+        sync: false
+      - key: ENABLE_AI_ANALYSIS
+        value: "true"
+      - key: DEEPSEEK_BASE_URL
+        value: https://api.deepseek.com
+      - key: DEEPSEEK_MODEL
+        value: deepseek-chat
+      - key: SPORTMONKS_API_KEY
+        sync: false
+      - key: BETA_AUTH_SECRET
+        sync: false
+      - key: PAYMENT_WEBHOOK_SECRET
+        sync: false
+      - key: DEEPSEEK_API_KEY
+        sync: false
