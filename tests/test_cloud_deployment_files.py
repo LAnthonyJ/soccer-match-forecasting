@@ -45,7 +45,9 @@ class CloudDeploymentFileTests(unittest.TestCase):
 
         self.assertEqual(config["build"]["builder"], "DOCKERFILE")
         self.assertIn("src.server:app", config["deploy"]["startCommand"])
-        self.assertIn("${PORT:-5000}", config["deploy"]["startCommand"])
+        self.assertIn("/bin/sh -c", config["deploy"]["startCommand"])
+        self.assertIn("${PORT}", config["deploy"]["startCommand"])
+        self.assertNotIn("${PORT:-5000}", config["deploy"]["startCommand"])
         self.assertEqual(config["deploy"]["healthcheckPath"], "/health/live")
 
     def test_render_config_mounts_persistent_disk(self):
