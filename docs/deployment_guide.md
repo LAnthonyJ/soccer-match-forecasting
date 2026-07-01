@@ -124,6 +124,7 @@ Platform notes:
 Do not sell from a deployment without a persistent disk. Card codes and subscriptions are stored under `DATA_DIR`.
 
 For a step-by-step fixed-link launch checklist, see `docs/cloud_platform_launch.md`.
+For the lowest-cost custom domain setup with Railway + Cloudflare, use `app.<your-domain>` and follow `docs/cloud_platform_launch.md`.
 
 ## Nginx Reverse Proxy
 

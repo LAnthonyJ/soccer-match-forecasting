@@ -1,43 +1,43 @@
 # Railway / Render / Zeabur 固定链接上线执行单
 
-目标：用托管平台直接拿到公网链接，例如 `https://xxx.up.railway.app/h5#/login`。买家付款后，只需要发送登录地址、用户名和卡密。
+目标：用托管平台拿到固定公网链接，例如 `https://app.your-domain.com/h5#/login`，买家付款后你只需要发送登录地址、用户名和卡密。
 
-## 1. 选择平台
+## 1. 平台选择
 
 优先顺序：
 
-1. Zeabur：中文界面，上手最轻。
-2. Railway：Docker 部署体验好，调试方便。
+1. Railway：当前项目已经有 `Dockerfile` 和 `railway.json`，部署路径最短。
+2. Zeabur：中文后台，上手轻，但你当前已经在 Railway 上跑通了。
 3. Render：稳定，但低价层可能有冷启动。
 
-首版只部署一个平台，避免多个线上数据目录不一致。
+默认继续使用 Railway，不做平台切换。
 
-## 2. 部署前必须确认
+## 2. 部署前确认
 
 - 代码已经推到 GitHub 仓库。
-- 平台服务使用 Dockerfile 部署。
-- 持久化磁盘/Volume 挂载到 `/app/data`。
-- 不能在没有持久化磁盘的免费环境正式售卖，否则卡密和订阅会在重启后丢失。
+- Railway 服务使用 Dockerfile 部署。
+- 持久化 Volume 已挂载到 `/app/data`。
+- 正式售卖不能依赖 Railway 默认域名，后续用自定义域名对外发货。
 
-## 3. 平台环境变量
+## 3. Railway 环境变量
 
-在平台后台配置以下变量：
+Railway 中至少需要这些变量：
 
 ```text
 APP_ENV=prod
-APP_BASE_URL=https://你的平台域名
+APP_BASE_URL=https://app.your-domain.com
 DATA_DIR=/app/data
 ENABLE_H5=true
 FLASK_DEBUG=0
-SPORTMONKS_API_KEY=你的Sportmonks新key
-BETA_AUTH_SECRET=至少32位随机字符串
+SPORTMONKS_API_KEY=<provider-token>
+BETA_AUTH_SECRET=<32+ char random string>
 BETA_SESSION_TTL_HOURS=720
 PAYMENT_PROVIDER=mock
-PAYMENT_WEBHOOK_SECRET=至少32位随机字符串
-PAYMENT_RETURN_URL=https://你的平台域名/h5#/account
+PAYMENT_WEBHOOK_SECRET=<32+ char random string>
+PAYMENT_RETURN_URL=https://app.your-domain.com/h5#/account
 ENABLE_DEV_PAYMENT_WEBHOOK=false
 ENABLE_AI_ANALYSIS=true
-DEEPSEEK_API_KEY=你的DeepSeek key
+DEEPSEEK_API_KEY=<deepseek-token>
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-chat
 ```
@@ -48,94 +48,101 @@ DEEPSEEK_MODEL=deepseek-chat
 python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
-`BETA_AUTH_SECRET` 和 `PAYMENT_WEBHOOK_SECRET` 必须不同。
+## 4. Railway 基本验收
 
-## 4. Railway
+部署成功后先检查：
 
-1. New Project -> Deploy from GitHub repo。
-2. Railway 自动识别 `railway.json` 和 `Dockerfile`。
-3. Variables 填入第 3 节环境变量。
-4. 添加 Volume，Mount Path 设置为 `/app/data`。
-5. 部署成功后打开 `https://你的railway域名/h5#/login`。
+- `https://<railway-default-domain>/health/live`
+- `https://<railway-default-domain>/h5#/login`
 
-## 5. Render
+如果这两条都能打开，再进入自定义域名阶段。
 
-1. New -> Web Service -> 连接 GitHub 仓库。
-2. Runtime 选择 Docker，或使用仓库里的 `render.yaml` Blueprint。
-3. 添加 Persistent Disk，Mount Path 设置为 `/app/data`。
-4. Environment 填入第 3 节环境变量。
-5. 部署成功后打开 `https://你的render域名/h5#/login`。
+## 5. 自定义域名
 
-## 6. Zeabur
+推荐方案：
 
-1. New Project -> Deploy from GitHub。
-2. 选择 Dockerfile 部署。
-3. Variables 填入第 3 节环境变量。
-4. 添加 Volume，Mount Path 设置为 `/app/data`。
-5. 部署成功后打开 `https://你的zeabur域名/h5#/login`。
+- 域名注册：Cloudflare Registrar
+- DNS：Cloudflare DNS Free
+- 对外链接：`https://app.<你的域名>/h5#/login`
 
-## 7. 线上验收
+只绑定一个子域名 `app`，不处理裸域名，减少配置和排障成本。
 
-替换成你的公网域名后执行：
+## 6. Railway 绑定自定义域名
+
+在 Railway 当前服务中添加：
+
+```text
+app.<你的域名>
+```
+
+Railway 会给你两条记录：
+
+- 一条 `CNAME`
+- 一条 `TXT` 验证记录
+
+在 Cloudflare DNS 中按 Railway 提示添加：
+
+- `Type: CNAME`
+  `Name: app`
+  `Target: <Railway 提供的 xxx.up.railway.app>`
+  `Proxy status: DNS only`
+- `Type: TXT`
+  `Name: <Railway 提供的验证名>`
+  `Value: <Railway 提供的验证值>`
+
+默认先用 `DNS only`，不要开启 Cloudflare 代理。
+
+## 7. 域名切换后的变量
+
+Railway 自定义域名验证成功后，把这两个变量改成正式域名：
+
+```text
+APP_BASE_URL=https://app.<你的域名>
+PAYMENT_RETURN_URL=https://app.<你的域名>/h5#/account
+```
+
+然后手动重新部署一次。
+
+## 8. 云端发卡
+
+正式卡密必须在云端环境生成，写入线上 `/app/data/auth/card_codes.json`。
+
+普通生成：
 
 ```bash
-python src/smoke_test_launch.py --base-url https://你的平台域名
+python src/auth/card_cli.py generate --tier basic --days 7 --count 20 --batch taobao-basic-week-001 --platform taobao --output /app/data/basic_week.csv
+python src/auth/card_cli.py generate --tier vip --days 30 --count 20 --batch xianyu-vip-month-001 --platform xianyu --output /app/data/vip_month.csv
+```
+
+发货导出：
+
+```bash
+python src/auth/card_cli.py issue-batch --tier basic --days 7 --count 20 --username-prefix wc --start-index 1 --batch taobao-basic-001 --platform taobao --output /app/data/exports/wc_basic.csv
+python src/auth/card_cli.py issue-batch --tier vip --days 30 --count 20 --username-prefix vip --start-index 1 --batch xianyu-vip-001 --platform xianyu --output /app/data/exports/wc_vip.csv
+```
+
+## 9. 最终验收
+
+替换成你的正式域名后执行：
+
+```bash
+python src/smoke_test_launch.py --base-url https://app.<你的域名>
 ```
 
 浏览器检查：
 
-- `https://你的平台域名/health/live` 返回健康。
-- `https://你的平台域名/h5#/login` 能打开登录页。
-- 未登录打开 `https://你的平台域名/h5#/search` 会回到登录页。
-- 未登录请求 `/api/search/fixtures` 返回 401。
-- basic 卡密登录后能查询基础预测。
-- vip 卡密登录后能查看 VIP 预测和 AI 分析。
-- 比赛时间显示北京时间。
-- Sportmonks 查询失败时页面给出明确错误，不会卡死。
+- `https://app.<你的域名>/health/live` 返回 200 JSON
+- `https://app.<你的域名>/h5#/login` 能打开登录页
+- basic 卡密登录后可查基础预测
+- vip 卡密登录后可看 VIP 数据和 AI 分析
+- 用中国大陆手机流量和家宽各测试一次
 
-## 8. 云端发卡
-
-正式卡密必须在云端服务环境里生成，写入线上 `/app/data/auth/card_codes.json`。
-
-基础版 7 天：
-
-```bash
-python src/auth/card_cli.py generate --tier basic --days 7 --count 20 --batch taobao-basic-week-001 --platform taobao --output /app/data/basic_week.csv
-```
-
-VIP 30 天：
-
-```bash
-python src/auth/card_cli.py generate --tier vip --days 30 --count 20 --batch xianyu-vip-month-001 --platform xianyu --output /app/data/vip_month.csv
-```
-
-查询批次：
-
-```bash
-python src/auth/card_cli.py list --batch taobao-basic-week-001
-```
-
-禁用卡密：
-
-```bash
-python src/auth/card_cli.py disable --code <code>
-```
-
-## 9. 发货模板
+## 10. 发货模板
 
 ```text
-登录地址：https://你的平台域名/h5#/login
+登录地址：https://app.<你的域名>/h5#/login
 用户名：{buyer_username}
 卡密：{card_code}
 等级：{basic/vip}
-有效期：{duration}
-说明：本服务仅提供赛事数据分析，不构成投注建议。
+说明：本服务仅提供赛事数据分析参考。
 ```
-
-## 10. 上线后每日检查
-
-- 打开 `/health/live`。
-- 抽查 1 场世界杯比赛预测。
-- 检查 `/app/data/auth/card_codes.json` 是否存在。
-- 检查 `/app/data/ai_analysis` 是否有 VIP 分析缓存。
-- 检查平台日志没有输出 API key、卡密批量列表、session token。

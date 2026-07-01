@@ -80,11 +80,14 @@ class CloudDeploymentFileTests(unittest.TestCase):
         guide = (ROOT / "docs" / "cloud_platform_launch.md").read_text(encoding="utf-8")
 
         self.assertIn("railway.json", guide)
-        self.assertIn("render.yaml", guide)
         self.assertIn("/app/data", guide)
+        self.assertIn("app.<你的域名>", guide)
+        self.assertIn("Cloudflare Registrar", guide)
+        self.assertIn("DNS only", guide)
         self.assertIn("python src/smoke_test_launch.py --base-url", guide)
         self.assertIn("src/auth/card_cli.py generate --tier basic", guide)
         self.assertIn("src/auth/card_cli.py generate --tier vip", guide)
+        self.assertIn("src/auth/card_cli.py issue-batch", guide)
 
     def test_seller_checklist_documents_cloud_card_issuance(self):
         checklist = (ROOT / "docs" / "seller_launch_checklist.md").read_text(encoding="utf-8")
@@ -92,7 +95,8 @@ class CloudDeploymentFileTests(unittest.TestCase):
         self.assertIn("/app/data/auth/card_codes.json", checklist)
         self.assertIn("src/auth/card_cli.py generate --tier basic", checklist)
         self.assertIn("src/auth/card_cli.py generate --tier vip", checklist)
-        self.assertIn("your-platform-domain/h5#/login", checklist)
+        self.assertIn("src/auth/card_cli.py issue-batch", checklist)
+        self.assertIn("app.<你的域名>/h5#/login", checklist)
         self.assertIn("GET /health/live", checklist)
 
 
