@@ -30,6 +30,17 @@ def main():
     generate.add_argument("--platform", default="", help="Optional platform tag")
     generate.add_argument("--output", default="", help="Optional CSV output path")
 
+    issue_batch = subparsers.add_parser("issue-batch")
+    issue_batch.add_argument("--tier", choices=["basic", "vip", "admin"], required=True)
+    issue_batch.add_argument("--duration-days", type=int)
+    issue_batch.add_argument("--days", type=int)
+    issue_batch.add_argument("--count", type=int, default=1)
+    issue_batch.add_argument("--username-prefix", required=True, help="Username prefix, e.g. wc")
+    issue_batch.add_argument("--start-index", type=int, default=1, help="Starting numeric index")
+    issue_batch.add_argument("--batch", default="", help="Optional batch id")
+    issue_batch.add_argument("--platform", default="", help="Optional platform tag")
+    issue_batch.add_argument("--output", required=True, help="CSV output path")
+
     list_codes = subparsers.add_parser("list")
     list_codes.add_argument("--batch", default="", help="Optional batch id filter")
 
@@ -66,6 +77,33 @@ def main():
             _print_csv(rows)
         return
 
+    if args.command == "issue-batch":
+        duration_days = args.days or args.duration_days
+        if not duration_days:
+            raise SystemExit("Either --days or --duration-days is required")
+        if not args.username_prefix.strip():
+            raise SystemExit("--username-prefix is required")
+        if args.start_index < 1:
+            raise SystemExit("--start-index must be >= 1")
+        rows = service.generate_codes(
+            args.tier,
+            duration_days,
+            args.count,
+            batch_id=args.batch,
+            platform=args.platform,
+        )
+        issued_rows = _issue_rows(
+            rows,
+            username_prefix=args.username_prefix.strip(),
+            start_index=args.start_index,
+            expires_days=duration_days,
+        )
+        out_path = Path(args.output)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_csv(out_path, issued_rows, fieldnames=["username", "card_code", "tier", "expires_days"])
+        print(out_path)
+        return
+
     if args.command == "list":
         _print_csv(service.list_codes(batch_id=args.batch or None))
         return
@@ -94,12 +132,28 @@ def _print_csv(rows):
         writer.writerow(row)
 
 
-def _write_csv(path: Path, rows):
+def _write_csv(path: Path, rows, fieldnames=None):
     with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=_fieldnames(rows))
+        writer = csv.DictWriter(handle, fieldnames=fieldnames or _fieldnames(rows))
         writer.writeheader()
         for row in rows:
             writer.writerow(row)
+
+
+def _issue_rows(rows, username_prefix: str, start_index: int, expires_days: int):
+    width = max(3, len(str(start_index + len(rows) - 1)))
+    issued = []
+    for offset, row in enumerate(rows):
+        username = f"{username_prefix}{start_index + offset:0{width}d}"
+        issued.append(
+            {
+                "username": username,
+                "card_code": row["code"],
+                "tier": row["tier"],
+                "expires_days": expires_days,
+            }
+        )
+    return issued
 
 
 def _fieldnames(rows):

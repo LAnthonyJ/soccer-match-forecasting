@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from src.billing.order_store import BillingStore
 from src.billing.subscription_service import SubscriptionService
@@ -126,3 +127,97 @@ class CardCodeServiceTests(unittest.TestCase):
         self.assertIsNone(record.code_value)
         self.assertIsNone(record.batch_id)
         self.assertFalse(record.disabled)
+
+
+class CardCliIssueBatchTests(unittest.TestCase):
+    def test_issue_rows_generates_prefixed_usernames(self):
+        from src.auth.card_cli import _issue_rows
+
+        rows = [
+            {"code": "code-a", "tier": "basic"},
+            {"code": "code-b", "tier": "basic"},
+            {"code": "code-c", "tier": "basic"},
+        ]
+
+        issued = _issue_rows(rows, username_prefix="wc", start_index=7, expires_days=7)
+
+        self.assertEqual(
+            issued,
+            [
+                {"username": "wc007", "card_code": "code-a", "tier": "basic", "expires_days": 7},
+                {"username": "wc008", "card_code": "code-b", "tier": "basic", "expires_days": 7},
+                {"username": "wc009", "card_code": "code-c", "tier": "basic", "expires_days": 7},
+            ],
+        )
+
+    def test_issue_rows_expands_padding_for_large_start_index(self):
+        from src.auth.card_cli import _issue_rows
+
+        rows = [{"code": "code-a", "tier": "vip"}]
+        issued = _issue_rows(rows, username_prefix="vip", start_index=1001, expires_days=30)
+
+        self.assertEqual(
+            issued,
+            [{"username": "vip1001", "card_code": "code-a", "tier": "vip", "expires_days": 30}],
+        )
+
+    def test_issue_batch_command_writes_shipping_csv(self):
+        import csv
+        from src.auth import card_cli
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "issued.csv"
+            fake_rows = [
+                {"code": "card-1", "tier": "basic"},
+                {"code": "card-2", "tier": "basic"},
+            ]
+
+            class FakeService:
+                def generate_codes(self, tier, duration_days, count, batch_id=None, platform=None):
+                    self.called = (tier, duration_days, count, batch_id, platform)
+                    return fake_rows
+
+            fake_service = FakeService()
+            argv = [
+                "card_cli.py",
+                "issue-batch",
+                "--tier", "basic",
+                "--days", "7",
+                "--count", "2",
+                "--username-prefix", "wc",
+                "--batch", "batch-1",
+                "--platform", "railway",
+                "--output", str(output),
+            ]
+            with patch("src.auth.card_cli.build_service", return_value=fake_service), patch("sys.argv", argv):
+                card_cli.main()
+
+            self.assertEqual(fake_service.called, ("basic", 7, 2, "batch-1", "railway"))
+            with output.open("r", encoding="utf-8", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+
+            self.assertEqual(
+                rows,
+                [
+                    {"username": "wc001", "card_code": "card-1", "tier": "basic", "expires_days": "7"},
+                    {"username": "wc002", "card_code": "card-2", "tier": "basic", "expires_days": "7"},
+                ],
+            )
+
+    def test_issue_batch_requires_positive_start_index(self):
+        from src.auth import card_cli
+
+        argv = [
+            "card_cli.py",
+            "issue-batch",
+            "--tier", "basic",
+            "--days", "7",
+            "--count", "1",
+            "--username-prefix", "wc",
+            "--start-index", "0",
+            "--output", "ignored.csv",
+        ]
+        with patch("src.auth.card_cli.build_service"), patch("sys.argv", argv):
+            with self.assertRaises(SystemExit) as ctx:
+                card_cli.main()
+        self.assertIn("--start-index must be >= 1", str(ctx.exception))
