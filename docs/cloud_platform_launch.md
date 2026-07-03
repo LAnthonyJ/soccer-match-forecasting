@@ -146,3 +146,28 @@ python src/smoke_test_launch.py --base-url https://app.<你的域名>
 等级：{basic/vip}
 说明：本服务仅提供赛事数据分析参考。
 ```
+## Cloudflare Pages + Pages Functions
+
+Use Cloudflare Pages only for the static H5 layer. Keep the Flask API on Railway, Zeabur, Tencent Cloud, or another Python host, and use Pages Functions as a same-domain `/api/*` proxy.
+
+Pages settings:
+
+```text
+Framework preset: None
+Root directory: soccer_prediction module
+Build command: npm run build
+Build output directory: dist
+```
+
+Pages environment:
+
+```text
+API_ORIGIN=https://your-api-domain.example
+```
+
+Proxy behavior:
+
+- `/` redirects to `/h5#/login`
+- `dist/` publishes the static H5 bundle
+- `functions/api/[[path]].js` forwards `/api/*` requests to `API_ORIGIN`
+- The frontend keeps using relative `/api/...` calls, so the browser sees a single domain

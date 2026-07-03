@@ -7,6 +7,16 @@ export class ApiClientError extends Error {
   }
 }
 
+const API_BASE_URL = String(
+  globalThis.__WC_PREDICT_CONFIG__?.apiBaseUrl || globalThis.__API_BASE__ || "",
+).replace(/\/+$/, "");
+
+function buildUrl(path) {
+  if (/^https?:\/\//i.test(path)) return path;
+  if (!API_BASE_URL) return path;
+  return `${API_BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
 function headers(opts = {}) {
   const result = { "Content-Type": "application/json" };
   if (opts.token) result["Authorization"] = `Bearer ${opts.token}`;
@@ -14,7 +24,7 @@ function headers(opts = {}) {
 }
 
 async function request(path, options = {}) {
-  const response = await fetch(path, {
+  const response = await fetch(buildUrl(path), {
     method: options.method || "GET",
     headers: headers({ userId: options.userId, token: options.token }),
     body: options.body ? JSON.stringify(options.body) : undefined,

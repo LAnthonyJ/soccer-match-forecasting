@@ -12,6 +12,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class CloudDeploymentFileTests(unittest.TestCase):
+    def test_package_json_has_cloudflare_build_script(self):
+        package_json = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(package_json["name"], "worldcup-predict-pages")
+        self.assertEqual(package_json["scripts"]["build"], "node scripts/build_cloudflare_pages.js")
+
     def test_dockerfile_uses_platform_port_and_production_entrypoint(self):
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 
@@ -76,6 +82,23 @@ class CloudDeploymentFileTests(unittest.TestCase):
         self.assertIn("docs/cloud_platform_launch.md", guide)
         self.assertIn("python src/smoke_test_launch.py --base-url https://<your-platform-domain>", guide)
 
+    def test_cloudflare_build_script_uses_frontend_source_and_runtime_api_base(self):
+        script = (ROOT / "scripts" / "build_cloudflare_pages.js").read_text(encoding="utf-8")
+
+        self.assertIn('path.join(rootDir, "frontend")', script)
+        self.assertIn('path.join(rootDir, "dist")', script)
+        self.assertIn("API_BASE_URL", script)
+        self.assertIn("runtime-config.js", script)
+
+    def test_cloudflare_pages_function_proxies_api_requests(self):
+        proxy = (ROOT / "functions" / "api" / "[[path]].js").read_text(encoding="utf-8")
+
+        self.assertIn("context.env.API_ORIGIN", proxy)
+        self.assertIn("requestUrl.pathname", proxy)
+        self.assertIn("requestUrl.search", proxy)
+        self.assertIn("fetch(targetUrl.toString(), init)", proxy)
+        self.assertIn("proxy_not_configured", proxy)
+
     def test_cloud_platform_launch_doc_has_operational_steps(self):
         guide = (ROOT / "docs" / "cloud_platform_launch.md").read_text(encoding="utf-8")
 
@@ -118,6 +141,35 @@ class RuntimeDataDirCloudTests(unittest.TestCase):
             expected = Path(tmpdir) / "prematch_snapshots"
             self.assertEqual(module.SNAPSHOT_DIR, expected)
         sys.modules.pop("src.data.prematch_snapshot", None)
+
+    def test_get_seasons_uses_league_include(self):
+        sys.modules.pop("src.data.sportmonks_client", None)
+        module = importlib.import_module("src.data.sportmonks_client")
+        with patch.object(module, "_get", return_value={"data": {"seasons": [{"id": 1}, {"id": 2}]}}) as mocked:
+            seasons = module.get_seasons(8)
+        self.assertEqual(seasons, [{"id": 1}, {"id": 2}])
+        self.assertEqual(mocked.call_args.args[0], "/leagues/8")
+        self.assertEqual(mocked.call_args.args[1]["include"], "seasons;currentSeason")
+        sys.modules.pop("src.data.sportmonks_client", None)
+
+    def test_get_current_season_uses_league_include(self):
+        sys.modules.pop("src.data.sportmonks_client", None)
+        module = importlib.import_module("src.data.sportmonks_client")
+        with patch.object(module, "_get", return_value={"data": {"currentseason": {"id": 99}, "seasons": [{"id": 98}]}}) as mocked:
+            season = module.get_current_season(8)
+        self.assertEqual(season, {"id": 99})
+        self.assertEqual(mocked.call_args.args[0], "/leagues/8")
+        self.assertEqual(mocked.call_args.args[1]["include"], "seasons;currentSeason")
+        sys.modules.pop("src.data.sportmonks_client", None)
+
+    def test_get_fixtures_by_season_uses_season_endpoint(self):
+        sys.modules.pop("src.data.sportmonks_client", None)
+        module = importlib.import_module("src.data.sportmonks_client")
+        with patch.object(module, "paginate", return_value=[]) as mocked:
+            module.get_fixtures_by_season(123, includes="participants;scores;league")
+        self.assertEqual(mocked.call_args.args[0], "/fixtures/seasons/123")
+        self.assertEqual(mocked.call_args.args[1]["include"], "participants;scores;league")
+        sys.modules.pop("src.data.sportmonks_client", None)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,7 @@
+{
+  "name": "worldcup-predict-pages",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build_cloudflare_pages.js"
+  }
+}

@@ -14,6 +14,7 @@ class H5FilesTests(unittest.TestCase):
             "styles.css",
             "app.js",
             "api.js",
+            "runtime-config.js",
             "state.js",
             "components/time.js",
             "views/login.js",
@@ -31,6 +32,9 @@ class H5FilesTests(unittest.TestCase):
         self.assertIn("Authorization", api_js)
         self.assertIn("/api/auth/redeem", api_js)
         self.assertIn("/api/teams/search", api_js)
+        self.assertIn("__WC_PREDICT_CONFIG__", api_js)
+        self.assertIn("buildUrl(path)", api_js)
+        self.assertIn("if (!API_BASE_URL) return path;", api_js)
 
     def test_state_tracks_session_unlock_and_clear_auth(self):
         state_js = (ROOT / "state.js").read_text(encoding="utf-8")

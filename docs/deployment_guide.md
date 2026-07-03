@@ -126,6 +126,39 @@ Do not sell from a deployment without a persistent disk. Card codes and subscrip
 For a step-by-step fixed-link launch checklist, see `docs/cloud_platform_launch.md`.
 For the lowest-cost custom domain setup with Railway + Cloudflare, use `app.<your-domain>` and follow `docs/cloud_platform_launch.md`.
 
+## Cloudflare Pages Frontend
+
+Use Cloudflare Pages only for the static H5 frontend. Keep the Flask API on Railway, Zeabur, Tencent Cloud, or another Python host.
+
+Pages build settings:
+
+```text
+Framework preset: None
+Root directory: soccer_prediction module
+Build command: npm run build
+Build output directory: dist
+```
+
+Pages environment:
+
+```text
+API_ORIGIN=https://your-api-domain.example
+```
+
+Behavior:
+
+- Static files are published from `dist/`.
+- `frontend/index.html` redirects `/` to `/h5#/login`.
+- `functions/api/[[path]].js` proxies same-domain `/api/*` requests to `API_ORIGIN`.
+- Do not set `API_BASE_URL` when using the Pages proxy path. Leave the frontend on relative `/api/...`.
+
+Validation:
+
+```text
+https://your-pages-domain.example/h5#/login
+https://your-pages-domain.example/api/health/live
+```
+
 ## Nginx Reverse Proxy
 
 ```nginx
