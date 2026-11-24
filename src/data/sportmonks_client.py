@@ -128,13 +128,22 @@ def get_leagues() -> list[dict]:
 
 
 def get_seasons(league_id: int) -> list[dict]:
-    return paginate("/seasons", {"filters": f"leagueCountries:{league_id}"}, per_page=50, max_pages=5)
+    data = _get(f"/leagues/{league_id}", {"include": "seasons;currentSeason"}, cache_ttl_min=360)
+    league = data.get("data") or {}
+    seasons = league.get("seasons") or []
+    return seasons if isinstance(seasons, list) else []
 
 
 def get_current_season(league_id: int) -> dict | None:
-    for s in paginate("/seasons", {"filters": f"leagueCountries:{league_id}"}, per_page=100, max_pages=3):
-        if s.get("is_current"):
-            return s
+    data = _get(f"/leagues/{league_id}", {"include": "seasons;currentSeason"}, cache_ttl_min=360)
+    league = data.get("data") or {}
+    current = league.get("currentseason") or league.get("currentSeason")
+    if isinstance(current, dict) and current:
+        return current
+    seasons = league.get("seasons") or []
+    for season in seasons:
+        if isinstance(season, dict) and season.get("is_current"):
+            return season
     return None
 
 
@@ -184,10 +193,10 @@ def get_fixture(fixture_id: int, includes: str = "") -> dict | None:
 
 
 def get_fixtures_by_season(season_id: int, includes: str = "") -> list[dict]:
-    params: dict[str, Any] = {"filters": f"seasonCountries:{season_id}"}
+    params: dict[str, Any] = {}
     if includes:
         params["include"] = includes
-    return paginate("/fixtures", params, per_page=100, max_pages=20)
+    return paginate(f"/fixtures/seasons/{season_id}", params, per_page=100, max_pages=20)
 
 
 # -- Squads / Teams / Players ---------------------------------------------------
