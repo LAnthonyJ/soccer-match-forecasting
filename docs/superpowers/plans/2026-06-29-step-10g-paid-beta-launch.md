@@ -659,7 +659,7 @@ In `subscribe.js`, after checkout:
 if (data.payment_url) {
   window.location.href = data.payment_url;
 } else {
-  showToast(`订单已创建：${data.order_id}`);
+  showToast(`Order created:${data.order_id}`);
 }
 ```
 

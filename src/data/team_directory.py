@@ -121,9 +121,9 @@ TEAM_ALIASES = [
 
 def _row(team: TeamAlias) -> dict:
     return {
-        "display_name": team.display_name,
+        "display_name": team.sportmonks_name,
         "sportmonks_name": team.sportmonks_name,
-        "aliases": list(team.aliases),
+        "aliases": list(dict.fromkeys((*team.aliases, team.display_name))),
     }
 
 
@@ -138,13 +138,13 @@ def merge_team_rows(extra_rows: list[dict] | None = None) -> list[dict]:
         existing = rows_by_name.get(name)
         if existing is None:
             rows_by_name[name] = {
-                "display_name": row.get("display_name") or name,
+                "display_name": name,
                 "sportmonks_name": name,
-                "aliases": list(dict.fromkeys(row.get("aliases", []) + [name])),
+                "aliases": list(dict.fromkeys(row.get("aliases", []) + [row.get("display_name") or name, name])),
             }
             continue
-        existing["display_name"] = existing.get("display_name") or row.get("display_name") or name
-        existing["aliases"] = list(dict.fromkeys(existing["aliases"] + row.get("aliases", []) + [name]))
+        existing["display_name"] = name
+        existing["aliases"] = list(dict.fromkeys(existing["aliases"] + row.get("aliases", []) + [row.get("display_name") or name, name]))
     return list(rows_by_name.values())
 
 

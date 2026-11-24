@@ -1,4 +1,4 @@
-﻿import tests.warnings_filter  # noqa: F401 鈥?suppress pickle warnings
+﻿import tests.warnings_filter  # noqa: F401 — suppress pickle warnings
 
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -57,7 +57,7 @@ class RefreshIntegrationTests(unittest.TestCase):
         from src.jobs.refresh_predictions import refresh_match_prediction
         from datetime import datetime, timedelta, timezone
         now = datetime.now(timezone.utc)
-        # Cache from 30 min ago, kickoff in 12 hours 鈫?should skip
+        # Cache from 30 min ago, kickoff in 12 hours → should skip
         cached = {
             "generated_at": (now - timedelta(minutes=30)).isoformat(),
             "_kickoff_utc": (now + timedelta(hours=12)).isoformat(),
@@ -164,7 +164,7 @@ class LiveHealthIsolationTests(unittest.TestCase):
         sys.modules.pop("src.services.prediction_service", None)
         from src.monitoring.health import check_all_live  # noqa: F811
         self.assertNotIn("src.services.prediction_service", sys.modules,
-                         "check_all_live import pulled in prediction_service 鈥?live health is miswired")
+                         "check_all_live import pulled in prediction_service — live health is miswired")
 
     def test_check_all_live_is_fast_path(self):
         """check_all_live must not call check_model_available or check_sportmonks_available."""

@@ -1,10 +1,10 @@
 ﻿"""
-Unified prediction service 鈥?single entry point for all prediction consumers.
+Unified prediction service — single entry point for all prediction consumers.
 
 CLI, web, API, smoke tests all call predict_match(). The service handles:
   - Sportmonks data fetching (fixture, odds, lineups, squad strengths)
   - Prematch snapshot construction
-  - Lineup signal 鈫?lambda adjustment
+  - Lineup signal → lambda adjustment
   - Engine prediction with market fusion + goal calibration
   - Basic/VIP output
   - Graceful degradation at every layer
@@ -90,7 +90,7 @@ class PredictionService:
         warnings: list[str] = []
         adapter = SportmonksAdapter()
 
-        # 鈹€鈹€ 1. Resolve fixture (fatal if fails) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+        # ── 1. Resolve fixture (fatal if fails) ──────────────────────────
         if match is None and fixture_id is not None:
             try:
                 raw = get_fixture(fixture_id, includes="participants;scores;league")
@@ -102,7 +102,7 @@ class PredictionService:
         elif match is None:
             raise ValueError("Either fixture_id or match must be provided")
 
-        # 鈹€鈹€ 2. Fetch odds (degradable) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+        # ── 2. Fetch odds (degradable) ──────────────────────────────────
         odds = None
         try:
             odds = adapter.average_odds(fixture_id) if fixture_id else None
@@ -110,9 +110,9 @@ class PredictionService:
             pass
         if odds is None:
             fallback.append("odds_missing")
-            warnings.append("market odds unavailable 鈥?model-only prediction")
+            warnings.append("market odds unavailable — model-only prediction")
 
-        # 鈹€鈹€ 3. Build prematch snapshot 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+        # ── 3. Build prematch snapshot ──────────────────────────────────
         hid = aid = None
         if fixture_id and use_prematch_api:
             try:
@@ -141,7 +141,7 @@ class PredictionService:
                 )
             except Exception:
                 fallback.append("prematch_api_failed")
-                warnings.append("Sportmonks prematch API failed 鈥?using manual/empty snapshot")
+                warnings.append("Sportmonks prematch API failed — using manual/empty snapshot")
                 prematch_api_ok = False
         if not use_prematch_api or not fixture_id or not prematch_api_ok:
             snap = build_prematch_snapshot(
@@ -151,7 +151,7 @@ class PredictionService:
                 manual_strengths_path=manual_strengths_path,
             )
 
-        # 鈹€鈹€ 4. Build lineup signals 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+        # ── 4. Build lineup signals ─────────────────────────────────────
         lineups_by_team: dict[str, list] = {}
         for p in snap.lineups:
             lineups_by_team.setdefault(p.team, []).append(p)
@@ -171,10 +171,10 @@ class PredictionService:
             )
         except Exception:
             fallback.append("lineup_signals_failed")
-            warnings.append("lineup signal build failed 鈥?continuing without adjustments")
+            warnings.append("lineup signal build failed — continuing without adjustments")
             lineup_adj = None
 
-        # 鈹€鈹€ 5. Build engine + predict (fatal if DC model missing) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+        # ── 5. Build engine + predict (fatal if DC model missing) ───────
         try:
             score_models = load_score_models()
             dc_model = score_models.get("dixon_coles")
@@ -182,7 +182,7 @@ class PredictionService:
                 raise RuntimeError("DC model not found in score_models.pkl")
         except Exception:
             fallback.append("dc_model_load_failed")
-            raise RuntimeError("Critical: DC model cannot be loaded 鈥?prediction unavailable")
+            raise RuntimeError("Critical: DC model cannot be loaded — prediction unavailable")
 
         engine = ProductionPredictionEngine(
             base_dc_model=dc_model,

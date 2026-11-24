@@ -111,7 +111,7 @@ class PrematchSnapshotTests(unittest.TestCase):
 
     def test_build_snapshot_expected_vs_confirmed_lineup(self):
         """Expected lineups must NOT be marked as confirmed."""
-        # Lineup without is_starting 鈫?expected
+        # Lineup without is_starting → expected
         snap = build_prematch_snapshot(
             self.match,
             lineups=[
@@ -122,7 +122,7 @@ class PrematchSnapshotTests(unittest.TestCase):
         self.assertEqual(snap.data_quality, "expected")
         self.assertEqual(snap.lineup_type, "expected")
 
-        # Empty lineups + only injuries 鈫?partial
+        # Empty lineups + only injuries → partial
         snap2 = build_prematch_snapshot(
             self.match,
             injuries=[

@@ -104,7 +104,7 @@ class CloudDeploymentFileTests(unittest.TestCase):
 
         self.assertIn("railway.json", guide)
         self.assertIn("/app/data", guide)
-        self.assertIn("app.<你的域名>", guide)
+        self.assertIn("app.<your-domain>", guide)
         self.assertIn("Cloudflare Registrar", guide)
         self.assertIn("DNS only", guide)
         self.assertIn("python src/smoke_test_launch.py --base-url", guide)
@@ -119,7 +119,7 @@ class CloudDeploymentFileTests(unittest.TestCase):
         self.assertIn("src/auth/card_cli.py generate --tier basic", checklist)
         self.assertIn("src/auth/card_cli.py generate --tier vip", checklist)
         self.assertIn("src/auth/card_cli.py issue-batch", checklist)
-        self.assertIn("app.<你的域名>/h5#/login", checklist)
+        self.assertIn("app.<your-domain>/h5#/login", checklist)
         self.assertIn("GET /health/live", checklist)
 
 

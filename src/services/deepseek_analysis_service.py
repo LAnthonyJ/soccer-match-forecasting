@@ -6,7 +6,7 @@ from typing import Any
 import requests
 
 
-RISK_DISCLAIMER = "本内容仅为数据分析，不构成投注建议。"
+RISK_DISCLAIMER = "This analysis is for informational purposes only and does not constitute betting advice."
 
 
 def _now_iso() -> str:
@@ -42,18 +42,18 @@ class DeepSeekAnalysisService:
         probs = payload.get("probabilities", {})
         top_scores = payload.get("top_scorelines", [])[:5]
         return (
-            "请根据以下世界杯赛前预测数据，输出一段简洁、克制的中文分析。"
-            "内容必须覆盖胜平负概率、最可能比分、总进球倾向、置信度和风险提示，不要编造数据。\n"
-            f"球队一: {payload.get('home_team')}\n"
-            f"球队二: {payload.get('away_team')}\n"
-            f"胜平负概率: {json.dumps(probs, ensure_ascii=False)}\n"
-            f"最可能比分: {json.dumps(top_scores, ensure_ascii=False)}\n"
-            f"Over2.5: {payload.get('over25')}\n"
-            f"BTTS: {payload.get('btts')}\n"
-            f"置信度: {payload.get('confidence')}\n"
-            f"阵容状态: {payload.get('lineup_data_status')}\n"
-            f"数据更新时间: {payload.get('data_updated_at')}\n"
-            f"最后一行必须原样输出：{RISK_DISCLAIMER}"
+            "Write a concise pre-match World Cup analysis in English. "
+            "Cover home, draw and away probabilities, the most likely score, goal totals, confidence and risks. Use only the supplied data.\n"
+            f"Home team: {payload.get('home_team')}\n"
+            f"Away team: {payload.get('away_team')}\n"
+            f"Match outcome probabilities: {json.dumps(probs, ensure_ascii=False)}\n"
+            f"Most likely scores: {json.dumps(top_scores, ensure_ascii=False)}\n"
+            f"Probability of over 2.5 goals: {payload.get('over25')}\n"
+            f"Probability that both teams score: {payload.get('btts')}\n"
+            f"Confidence: {payload.get('confidence')}\n"
+            f"Lineup status: {payload.get('lineup_data_status')}\n"
+            f"Data update time: {payload.get('data_updated_at')}\n"
+            f"End with this exact line: {RISK_DISCLAIMER}"
         )
 
     def _fallback_summary(self, payload: dict[str, Any]) -> str:
@@ -61,12 +61,12 @@ class DeepSeekAnalysisService:
         top = payload.get("top_scorelines", [])
         first = top[0] if top else [None, None, 0]
         analysis = (
-            f"{payload.get('home_team')} 对阵 {payload.get('away_team')} 的模型结果显示："
-            f"主胜 {round((probs.get('home') or 0) * 100, 1)}%，"
-            f"平局 {round((probs.get('draw') or 0) * 100, 1)}%，"
-            f"客胜 {round((probs.get('away') or 0) * 100, 1)}%。"
-            f"当前最可能比分是 {first[0]}-{first[1]}，"
-            f"模型置信度为 {round((payload.get('confidence') or 0) * 100, 1)}%。"
+            f"{payload.get('home_team')} vs {payload.get('away_team')} model forecast: "
+            f"home win {round((probs.get('home') or 0) * 100, 1)}%, "
+            f"draw {round((probs.get('draw') or 0) * 100, 1)}%, "
+            f"away win {round((probs.get('away') or 0) * 100, 1)}%. "
+            f"Most likely score: {first[0]}-{first[1]}. "
+            f"Model confidence: {round((payload.get('confidence') or 0) * 100, 1)}%. "
         )
         return self._ensure_disclaimer(analysis)
 
@@ -80,7 +80,7 @@ class DeepSeekAnalysisService:
             json={
                 "model": self.model,
                 "messages": [
-                    {"role": "system", "content": "你是足球赛前分析助手。输出中文，直接、具体、克制。"},
+                    {"role": "system", "content": "You are a football analyst writing before kickoff. Use clear, specific English and acknowledge uncertainty."},
                     {"role": "user", "content": prompt},
                 ],
                 "temperature": 0.5,
@@ -102,7 +102,9 @@ class DeepSeekAnalysisService:
     def generate(self, payload: dict[str, Any]) -> dict[str, Any]:
         cache_path = self._cache_path(payload)
         if cache_path.exists():
-            return json.loads(cache_path.read_text(encoding="utf-8"))
+            cached = json.loads(cache_path.read_text(encoding="utf-8"))
+            if cached.get("language") == "en":
+                return cached
 
         if self.enabled and self.api_key:
             try:
@@ -115,7 +117,7 @@ class DeepSeekAnalysisService:
         result = {
             "fixture_id": payload.get("match_id"),
             "analysis": analysis,
-            "language": "zh-CN",
+            "language": "en",
             "model": self.model,
             "generated_at": _now_iso(),
             "data_sources": ["sportmonks", "prediction_snapshot"],

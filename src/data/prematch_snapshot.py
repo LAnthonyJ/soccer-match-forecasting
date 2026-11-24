@@ -1,5 +1,5 @@
 ﻿"""
-Pre-match data snapshot 鈥?reproducible pre-game context for every prediction.
+Pre-match data snapshot — reproducible pre-game context for every prediction.
 
 Captures lineups, injuries, player strengths, and odds at a point in time
 so that every prediction can be replayed and audited later.
@@ -132,7 +132,7 @@ def build_prematch_snapshot(
     if not final_injuries and manual_injuries_path:
         final_injuries = _load_json_records(manual_injuries_path, InjuryRecord, match)
 
-    # Collect strengths (per-team, not per-match 鈥?filter by team name)
+    # Collect strengths (per-team, not per-match — filter by team name)
     final_strengths = [r for r in (player_strengths or [])
                        if _team_belongs(r, match.home_team, match.away_team)]
     if not final_strengths and manual_strengths_path:

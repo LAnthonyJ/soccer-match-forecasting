@@ -1,5 +1,5 @@
 ﻿"""
-Historical backtest CLI 鈥?Sportmonks fixtures 鈫?model prediction 鈫?evaluation.
+Historical backtest CLI — Sportmonks fixtures → model prediction → evaluation.
 
 Supports:
   --model dc          Static Dixon-Coles (baseline)
@@ -433,27 +433,27 @@ def load_backtest_runs(model_version: str | None = None) -> list[dict]:
 def _print_report(run: HistoricalBacktestRun) -> None:
     r = run.report
     print(f"\n{'='*60}")
-    print(f"  BACKTEST REPORT 鈥?{run.model_version}")
+    print(f"  BACKTEST REPORT — {run.model_version}")
     print(f"  Data: {run.data_version}")
     print(f"  Generated: {run.generated_at.isoformat()}")
     print(f"{'='*60}")
     print(f"  Matches:           {r.n_matches:>6}")
-    print(f"  {'鈹€'*40}")
+    print(f"  {'─'*40}")
     print(f"  HDA LogLoss:       {r.hda_logloss:>8.4f}")
     print(f"  HDA Brier:         {r.hda_brier:>8.4f}")
     print(f"  ECE:               {r.ece:>8.4f}")
     if r.market_logloss is not None:
         diff = r.hda_logloss - r.market_logloss
-        print(f"  Market LogLoss:    {r.market_logloss:>8.4f}  (螖={diff:+.4f})")
+        print(f"  Market LogLoss:    {r.market_logloss:>8.4f}  (difference={diff:+.4f})")
     if r.clv_mean is not None:
         print(f"  CLV Mean:          {r.clv_mean:>8.4f}")
-    print(f"  {'鈹€'*40}")
+    print(f"  {'─'*40}")
     print(f"  RPS (total goals): {r.rps_total_goals:>8.4f}")
     print(f"  Score LogLoss:     {r.exact_score_logloss:>8.4f}")
     print(f"  Top-3 Score Hit:   {r.top3_score_hit_rate:>7.1%}")
     print(f"  Top-5 Score Hit:   {r.top5_score_hit_rate:>7.1%}")
     if r.mean_predicted_goals is not None and r.mean_actual_goals is not None:
-        print(f"  {'鈹€'*40}")
+        print(f"  {'─'*40}")
         print(f"  Mean Pred Goals:   {r.mean_predicted_goals:>8.2f}")
         print(f"  Mean Actual Goals: {r.mean_actual_goals:>8.2f}")
         if r.over25_ece is not None:
@@ -472,7 +472,7 @@ def _print_comparison(runs: list[HistoricalBacktestRun]) -> None:
     col_w = max(col_w, 14)
 
     header = f"  {'Metric':<25}" + "".join(f"{l:>{col_w}}" for l in labels)
-    sep = f"  {'鈹€'*25}" + f"  {'鈹€'*(col_w-2)}" * len(labels)
+    sep = f"  {'─'*25}" + f"  {'─'*(col_w-2)}" * len(labels)
 
     print(f"\n{'='*(25 + col_w*len(labels) + 4)}")
     print(f"  MODEL COMPARISON")
@@ -491,7 +491,7 @@ def _print_comparison(runs: list[HistoricalBacktestRun]) -> None:
         row = f"  {name:<25}" + "".join(_fmt(v) for v in vals)
         print(row)
 
-    # Market LogLoss 鈥?per-run, may be None for pure-model columns
+    # Market LogLoss — per-run, may be None for pure-model columns
     market_vals = [r.report.market_logloss for r in runs]
     if any(v is not None for v in market_vals):
         row = f"  {'Market LogLoss':<25}" + "".join(_fmt(v) for v in market_vals)
@@ -647,7 +647,7 @@ def _learn_grouped_calibrator(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Historical backtest: Sportmonks fixtures 鈫?model 鈫?evaluation"
+        description="Historical backtest: Sportmonks fixtures → model → evaluation"
     )
     parser.add_argument("--from", dest="from_date", required=True)
     parser.add_argument("--to", dest="to_date", required=True)
@@ -697,7 +697,7 @@ def main():
 
 def _run_market_backtest(args, league_ids):
     print(f"Model: MARKET baseline (de-vigged odds)")
-    print(f"Fetching fixtures {args.from_date} 鈫?{args.to_date} ...")
+    print(f"Fetching fixtures {args.from_date} → {args.to_date} ...")
     matches = fetch_matches(args.from_date, args.to_date, league_ids=league_ids)
 
     if not matches:
@@ -728,7 +728,7 @@ def _run_market_backtest(args, league_ids):
             print(
                 f"  {result.snapshot.match_id:<40} "
                 f"H={p['home']:.2f} D={p['draw']:.2f} A={p['away']:.2f} "
-                f"鈫?actual={result.actual_outcome} "
+                f"→ actual={result.actual_outcome} "
                 f"({result.actual_home_goals}-{result.actual_away_goals})"
             )
 
@@ -739,7 +739,7 @@ def _run_market_backtest(args, league_ids):
 def _run_static_backtest(args, league_ids, goal_multiplier: float | None = None):
     gm_label = f" (goal_mlt={goal_multiplier})" if goal_multiplier else ""
     print(f"Model: STATIC Dixon-Coles{gm_label}")
-    print(f"Fetching fixtures {args.from_date} 鈫?{args.to_date} ...")
+    print(f"Fetching fixtures {args.from_date} → {args.to_date} ...")
     matches = fetch_matches(args.from_date, args.to_date, league_ids=league_ids)
 
     if not matches:
@@ -770,7 +770,7 @@ def _run_static_backtest(args, league_ids, goal_multiplier: float | None = None)
             print(
                 f"  {result.snapshot.match_id:<40} "
                 f"H={p['home']:.2f} D={p['draw']:.2f} A={p['away']:.2f} "
-                f"鈫?actual={result.actual_outcome} "
+                f"→ actual={result.actual_outcome} "
                 f"({result.actual_home_goals}-{result.actual_away_goals})"
             )
 
@@ -802,7 +802,7 @@ def _run_dynamic_backtest(
     warmup_start = from_date - timedelta(days=WARMUP_DAYS)
 
     # Fetch warmup matches
-    print(f"Fetching warmup fixtures {warmup_start.strftime('%Y-%m-%d')} 鈫?{args.from_date} ...")
+    print(f"Fetching warmup fixtures {warmup_start.strftime('%Y-%m-%d')} → {args.from_date} ...")
     warmup_matches = fetch_matches(
         warmup_start.strftime("%Y-%m-%d"),
         args.from_date,
@@ -811,7 +811,7 @@ def _run_dynamic_backtest(
     print(f"  {len(warmup_matches)} warmup matches")
 
     # Fetch test window matches
-    print(f"Fetching test fixtures {args.from_date} 鈫?{args.to_date} ...")
+    print(f"Fetching test fixtures {args.from_date} → {args.to_date} ...")
     test_matches = fetch_matches(args.from_date, args.to_date, league_ids=league_ids)
 
     if not test_matches:
@@ -850,7 +850,7 @@ def _run_dynamic_backtest(
             print(
                 f"  {result.snapshot.match_id:<40} "
                 f"H={p['home']:.2f} D={p['draw']:.2f} A={p['away']:.2f} "
-                f"鈫?actual={result.actual_outcome} "
+                f"→ actual={result.actual_outcome} "
                 f"({result.actual_home_goals}-{result.actual_away_goals})"
             )
 
@@ -887,7 +887,7 @@ def _run_compare(args, league_ids):
 
     runs: list[HistoricalBacktestRun] = []
 
-    # 1. Static DC (no fusion 鈥?pure model, rename for display)
+    # 1. Static DC (no fusion — pure model, rename for display)
     print("Running static DC (pure model)...")
     run_dc = run_backtest_static(_strip_odds(fixtures))
     run_dc = HistoricalBacktestRun(
@@ -899,7 +899,7 @@ def _run_compare(args, league_ids):
     )
     runs.append(run_dc)
 
-    # 2. Dynamic DC (no fusion 鈥?pure model)
+    # 2. Dynamic DC (no fusion — pure model)
     warmup_start = from_date - timedelta(days=WARMUP_DAYS)
     print(f"Fetching warmup matches for dynamic DC...")
     warmup_matches = fetch_matches(
@@ -996,4 +996,3 @@ def _run_compare(args, league_ids):
 
 if __name__ == "__main__":
     main()
-

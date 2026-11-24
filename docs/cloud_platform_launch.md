@@ -1,27 +1,10 @@
-# Railway / Render / Zeabur 固定链接上线执行单
+# Railway, Render and Zeabur deployment
 
-目标：用托管平台拿到固定公网链接，例如 `https://app.your-domain.com/h5#/login`，买家付款后你只需要发送登录地址、用户名和卡密。
+The recorded deployment uses Railway with the repository Dockerfile and railway.json. Zeabur offers a Chinese-language admin console. Lower-cost Render instances may cold-start. Use a fixed public login URL when delivering accounts to customers.
 
-## 1. 平台选择
+## Railway setup
 
-优先顺序：
-
-1. Railway：当前项目已经有 `Dockerfile` 和 `railway.json`，部署路径最短。
-2. Zeabur：中文后台，上手轻，但你当前已经在 Railway 上跑通了。
-3. Render：稳定，但低价层可能有冷启动。
-
-默认继续使用 Railway，不做平台切换。
-
-## 2. 部署前确认
-
-- 代码已经推到 GitHub 仓库。
-- Railway 服务使用 Dockerfile 部署。
-- 持久化 Volume 已挂载到 `/app/data`。
-- 正式售卖不能依赖 Railway 默认域名，后续用自定义域名对外发货。
-
-## 3. Railway 环境变量
-
-Railway 中至少需要这些变量：
+Push the project to GitHub, select Dockerfile deployment, and mount the persistent volume at /app/data. Configure the following variables using values from the appropriate providers.
 
 ```text
 APP_ENV=prod
@@ -42,110 +25,53 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-chat
 ```
 
-生成随机 secret：
+Generate a random secret with:
 
 ```bash
 python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
-## 4. Railway 基本验收
+Open /health/live and /h5#/login on the Railway service domain. Once both work, add app.<your-domain> as a custom domain on the same service. The documented setup uses Cloudflare Registrar and Cloudflare DNS. Configure only the app subdomain. In Cloudflare, create the CNAME named app pointing to the Railway-supplied target and the TXT record using Railway's verification name and value. Set the CNAME to DNS only during verification.
 
-部署成功后先检查：
-
-- `https://<railway-default-domain>/health/live`
-- `https://<railway-default-domain>/h5#/login`
-
-如果这两条都能打开，再进入自定义域名阶段。
-
-## 5. 自定义域名
-
-推荐方案：
-
-- 域名注册：Cloudflare Registrar
-- DNS：Cloudflare DNS Free
-- 对外链接：`https://app.<你的域名>/h5#/login`
-
-只绑定一个子域名 `app`，不处理裸域名，减少配置和排障成本。
-
-## 6. Railway 绑定自定义域名
-
-在 Railway 当前服务中添加：
+After Railway verifies the domain, update the public URLs and redeploy:
 
 ```text
-app.<你的域名>
+APP_BASE_URL=https://app.<your-domain>
+PAYMENT_RETURN_URL=https://app.<your-domain>/h5#/account
 ```
 
-Railway 会给你两条记录：
+## Issue codes and verify the service
 
-- 一条 `CNAME`
-- 一条 `TXT` 验证记录
-
-在 Cloudflare DNS 中按 Railway 提示添加：
-
-- `Type: CNAME`
-  `Name: app`
-  `Target: <Railway 提供的 xxx.up.railway.app>`
-  `Proxy status: DNS only`
-- `Type: TXT`
-  `Name: <Railway 提供的验证名>`
-  `Value: <Railway 提供的验证值>`
-
-默认先用 `DNS only`，不要开启 Cloudflare 代理。
-
-## 7. 域名切换后的变量
-
-Railway 自定义域名验证成功后，把这两个变量改成正式域名：
-
-```text
-APP_BASE_URL=https://app.<你的域名>
-PAYMENT_RETURN_URL=https://app.<你的域名>/h5#/account
-```
-
-然后手动重新部署一次。
-
-## 8. 云端发卡
-
-正式卡密必须在云端环境生成，写入线上 `/app/data/auth/card_codes.json`。
-
-普通生成：
+Generate codes in the hosted environment so they are saved to /app/data/auth/card_codes.json. Use the following commands to generate and export batches.
 
 ```bash
 python src/auth/card_cli.py generate --tier basic --days 7 --count 20 --batch taobao-basic-week-001 --platform taobao --output /app/data/basic_week.csv
 python src/auth/card_cli.py generate --tier vip --days 30 --count 20 --batch xianyu-vip-month-001 --platform xianyu --output /app/data/vip_month.csv
 ```
 
-发货导出：
-
 ```bash
 python src/auth/card_cli.py issue-batch --tier basic --days 7 --count 20 --username-prefix wc --start-index 1 --batch taobao-basic-001 --platform taobao --output /app/data/exports/wc_basic.csv
 python src/auth/card_cli.py issue-batch --tier vip --days 30 --count 20 --username-prefix vip --start-index 1 --batch xianyu-vip-001 --platform xianyu --output /app/data/exports/wc_vip.csv
 ```
 
-## 9. 最终验收
-
-替换成你的正式域名后执行：
+Run the smoke test for the production domain:
 
 ```bash
-python src/smoke_test_launch.py --base-url https://app.<你的域名>
+python src/smoke_test_launch.py --base-url https://app.<your-domain>
 ```
 
-浏览器检查：
+Confirm that /health/live returns HTTP 200 and JSON, the H5 login page loads, the basic tier can read forecasts and VIP can access extended data and AI analysis. The historical launch checklist included testing on mainland Chinese mobile and residential networks.
 
-- `https://app.<你的域名>/health/live` 返回 200 JSON
-- `https://app.<你的域名>/h5#/login` 能打开登录页
-- basic 卡密登录后可查基础预测
-- vip 卡密登录后可看 VIP 数据和 AI 分析
-- 用中国大陆手机流量和家宽各测试一次
-
-## 10. 发货模板
+## Customer delivery template
 
 ```text
-登录地址：https://app.<你的域名>/h5#/login
-用户名：{buyer_username}
-卡密：{card_code}
-等级：{basic/vip}
-说明：本服务仅提供赛事数据分析参考。
+Login URL: https://app.<your-domain>/h5#/login
+Username: {buyer_username}
+Access code: {card_code}
+Tier: {basic/vip}
+This service provides match data analysis.
 ```
+
 ## Cloudflare Pages + Pages Functions
 
 Use Cloudflare Pages only for the static H5 layer. Keep the Flask API on Railway, Zeabur, Tencent Cloud, or another Python host, and use Pages Functions as a same-domain `/api/*` proxy.

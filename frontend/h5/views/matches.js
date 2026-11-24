@@ -11,21 +11,21 @@ function matchCard(match) {
         <div class="kickoff">vs</div>
         <div class="team away">${match.away_team}</div>
       </div>
-      <div class="kickoff">${match.tournament || "国际赛事"} · ${formatBeijingTime(match.kickoff_utc)}</div>
+      <div class="kickoff">${match.tournament || "International match"} · ${formatBeijingTime(match.kickoff_utc)}</div>
     </article>
   `;
 }
 
 export async function renderMatches(root) {
-  root.innerHTML = loading("正在加载比赛...");
+  root.innerHTML = loading("Loading matches...");
   try {
     const { data, meta } = await api.matches(state.userId, state.sessionToken);
-    const warning = meta?.warning ? `<div class="card locked">数据源暂时不可用，当前显示空列表。</div>` : "";
+    const warning = meta?.warning ? `<div class="card locked">The data source is temporarily unavailable.</div>` : "";
     if (!data.matches.length) {
-      root.innerHTML = sectionTitle("今日比赛") + warning + emptyState("暂时没有可展示的比赛");
+      root.innerHTML = sectionTitle("Today's matches") + warning + emptyState("No matches to display");
       return;
     }
-    root.innerHTML = sectionTitle("今日比赛") + warning + data.matches.map(matchCard).join("");
+    root.innerHTML = sectionTitle("Today's matches") + warning + data.matches.map(matchCard).join("");
     root.querySelectorAll("[data-fixture-id]").forEach((node) => {
       node.addEventListener("click", () => {
         const fixtureId = node.dataset.fixtureId;

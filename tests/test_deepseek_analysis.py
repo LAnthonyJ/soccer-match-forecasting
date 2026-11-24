@@ -27,10 +27,10 @@ class DeepSeekAnalysisServiceTests(unittest.TestCase):
                 model="deepseek-chat",
                 enabled=True,
             )
-            with patch.object(svc, "_call_api", return_value="分析内容") as call_mock:
+            with patch.object(svc, "_call_api", return_value="Analysis") as call_mock:
                 first = svc.generate(payload)
                 second = svc.generate(payload)
-                self.assertIn("分析内容", first["analysis"])
-                self.assertIn("本内容仅为数据分析，不构成投注建议。", first["analysis"])
+                self.assertIn("Analysis", first["analysis"])
+                self.assertIn("This analysis is for informational purposes only and does not constitute betting advice.", first["analysis"])
                 self.assertEqual(first["analysis"], second["analysis"])
                 self.assertEqual(call_mock.call_count, 1)

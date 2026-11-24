@@ -1,7 +1,7 @@
 """
 Pre-match info extractor (Phase 3b).
 
-1. Search 直播吧 for pre-match news (starting XI, injuries)
+1. Search Zhibo8 for pre-match news (starting XI, injuries)
 2. Use DeepSeek to extract structured data from article text
 3. Compute 12 pre-match signals from extracted data + transfermarkt
 
@@ -31,11 +31,11 @@ HEADERS = {
 
 
 # ---------------------------------------------------------------------------
-# Step 1: Search 直播吧 for pre-match articles
+# Step 1: Search Zhibo8 for pre-match articles
 # ---------------------------------------------------------------------------
 
 def search_zhibo8(team_name: str, max_articles: int = 10) -> list[dict]:
-    """Search 直播吧 for recent articles about a national team."""
+    """Search Zhibo8 for recent articles about a national team."""
     articles = []
     search_url = f'https://news.zhibo8.cc/zuqiu/'
 
@@ -111,7 +111,7 @@ def search_news_for_match(home_team: str, away_team: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def fetch_article_text(url: str) -> str:
-    """Fetch full text of a 直播吧 article."""
+    """Fetch full text of a Zhibo8 article."""
     try:
         resp = requests.get(url, headers=HEADERS, timeout=15)
         resp.encoding = 'utf-8'
@@ -131,27 +131,9 @@ def fetch_article_text(url: str) -> str:
 # Step 3: LLM extraction (DeepSeek)
 # ---------------------------------------------------------------------------
 
-EXTRACTION_PROMPT = """你是一个足球数据提取助手。从以下赛前新闻中提取结构化信息。
+EXTRACTION_PROMPT = """Extract the pre-match facts explicitly reported in the articles. Return only JSON using the keys below. Use null or an empty array for missing facts. Preserve the names printed in the source. Starting XI means the expected starters. Missing players include confirmed injuries and suspensions. Injury entries have player, type and severity fields. Use mild, medium or severe. Returns are key players returning from injury.
 
-要求：
-1. 只提取文中明确提到的信息，不要编造
-2. 如果文中没有提到，填 null
-3. 返回严格 JSON，不要其他内容
-
-需要提取：
-- home_formation: 主队阵型 (如 "4-3-3", "4-2-3-1")
-- away_formation: 客队阵型 (如 "4-4-2", "3-5-2")
-- home_starting_xi: 主队预计首发11人名单 (数组)
-- away_starting_xi: 客队预计首发11人名单 (数组)
-- home_missing_players: 主队确认缺阵球员 (数组, 含伤病+停赛)
-- away_missing_players: 客队确认缺阵球员 (数组)
-- home_injury_details: 主队伤病详情 (数组: {"player": "球员名", "type": "伤病类型", "severity": "轻/中/重"})
-- away_injury_details: 客队伤病详情 (数组)
-- home_key_returns: 主队伤愈回归的关键球员 (数组)
-- away_key_returns: 客队伤愈回归的关键球员 (数组)
-
-JSON 格式:
-{
+{{
   "home_formation": null,
   "away_formation": null,
   "home_starting_xi": [],
@@ -162,11 +144,10 @@ JSON 格式:
   "away_injury_details": [],
   "home_key_returns": [],
   "away_key_returns": []
-}
+}}
 
-新闻内容:
-{article_text}
-"""
+Articles:
+{article_text}"""
 
 
 def extract_with_llm(articles: list[dict],

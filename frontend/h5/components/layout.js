@@ -1,4 +1,4 @@
-export function loading(label = "正在加载...") {
+export function loading(label = "Loading...") {
   return `<section class="loading-view">${label}</section>`;
 }
 
@@ -7,7 +7,7 @@ export function emptyState(label) {
 }
 
 export function errorState(error) {
-  return `<section class="error">${error.message || "请求失败"}</section>`;
+  return `<section class="error">${error.message || "Request failed"}</section>`;
 }
 
 export function sectionTitle(title, action = "") {

@@ -2,9 +2,9 @@
 Prediction API server (Flask).
 
 Endpoints:
-    GET  /health                  闂?model/data/cache health
-    GET  /api/predictions/<id>    闂?prediction (tier from auth header)
-    GET  /api/predictions/<id>/vip 闂?VIP prediction (requires vip+ auth)
+    GET  /health                  — model/data/cache health
+    GET  /api/predictions/<id>    — prediction (tier from auth header)
+    GET  /api/predictions/<id>/vip — VIP prediction (requires vip+ auth)
 
 Start:
     python src/api/app.py

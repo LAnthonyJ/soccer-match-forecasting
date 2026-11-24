@@ -1,4 +1,4 @@
-const BEIJING_FORMATTER = new Intl.DateTimeFormat("zh-CN", {
+const BEIJING_FORMATTER = new Intl.DateTimeFormat("en-GB", {
   timeZone: "Asia/Shanghai",
   year: "numeric",
   month: "2-digit",
@@ -18,8 +18,8 @@ function parseUtc(value) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-export function formatBeijingTime(value, fallback = "时间待定") {
+export function formatBeijingTime(value, fallback = "Time TBD") {
   const date = parseUtc(value);
   if (!date) return fallback;
-  return `北京时间 ${BEIJING_FORMATTER.format(date)}`;
+  return `Beijing time ${BEIJING_FORMATTER.format(date)}`;
 }

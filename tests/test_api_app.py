@@ -120,7 +120,7 @@ class ApiTeamSearchTests(unittest.TestCase):
             r = c.get("/api/teams/search?q=西班")
             self.assertEqual(r.status_code, 200)
             first = _data(r)["teams"][0]
-            self.assertEqual(first["display_name"], "西班牙")
+            self.assertEqual(first["display_name"], "Spain")
             self.assertEqual(first["sportmonks_name"], "Spain")
 
     def test_team_search_matches_paraguay_chinese_and_english(self):
@@ -129,7 +129,7 @@ class ApiTeamSearchTests(unittest.TestCase):
             en = c.get("/api/teams/search?q=Paraguay")
             self.assertEqual(zh.status_code, 200)
             self.assertEqual(en.status_code, 200)
-            self.assertEqual(_data(zh)["teams"][0]["display_name"], "巴拉圭")
+            self.assertEqual(_data(zh)["teams"][0]["display_name"], "Paraguay")
             self.assertEqual(_data(en)["teams"][0]["sportmonks_name"], "Paraguay")
 
     def test_team_search_includes_world_cup_fixture_participants(self):

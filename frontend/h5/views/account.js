@@ -4,17 +4,17 @@ import { errorState, sectionTitle } from "../components/layout.js";
 import { formatBeijingTime } from "../components/time.js";
 
 function tierLabel(tier) {
-  if (tier === "vip") return "VIP 版";
-  if (tier === "admin") return "管理员";
-  return "基础版";
+  if (tier === "vip") return "VIP plan";
+  if (tier === "admin") return "Administrator";
+  return "Basic";
 }
 
 export async function renderAccount(root) {
   root.innerHTML = `
-    ${sectionTitle("我的账户")}
-    <section id="accountProfile" class="card">正在加载账户信息...</section>
+    ${sectionTitle("My account")}
+    <section id="accountProfile" class="card">Loading account details...</section>
     <section class="card">
-      <button id="logoutButton" class="secondary-button full-width">退出登录</button>
+      <button id="logoutButton" class="secondary-button full-width">Sign out</button>
     </section>
   `;
 
@@ -25,7 +25,7 @@ export async function renderAccount(root) {
 
   const card = root.querySelector("#accountProfile");
   if (!state.userId || !state.sessionToken || !state.sessionUnlocked) {
-    card.innerHTML = "<p>请先登录</p>";
+    card.innerHTML = "<p>Sign in first</p>";
     return;
   }
 
@@ -34,9 +34,9 @@ export async function renderAccount(root) {
     state.subscription = data;
     card.innerHTML = `
       <h2>${state.userId}</h2>
-      <p>等级：${tierLabel(data.tier || "basic")}</p>
-      <p>状态：${data.status}</p>
-      <p>到期时间：${formatBeijingTime(data.expires_at, "未设置")}</p>
+      <p>Tier: ${tierLabel(data.tier || "basic")}</p>
+      <p>Status: ${data.status}</p>
+      <p>Expires: ${formatBeijingTime(data.expires_at, "Not set")}</p>
     `;
   } catch (error) {
     card.innerHTML = errorState(error);

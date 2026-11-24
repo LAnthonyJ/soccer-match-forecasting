@@ -8,19 +8,19 @@ Each signal's coefficient is CALIBRATED from historical data.
 Only statistically significant signals (p < 0.1, n >= 20) are applied.
 
 13 pre-match signals:
-  46  key_player_missing     核心球员缺阵（含伤病+停赛）
-  47  missing_caps_pct       缺阵球员出场占比
-  48  missing_goals_pct      缺阵球员进球占比
-  49  starting_xi_strength   首发阵容强度
-  50  formation_change       阵型变化
-  51  new_manager_matches    教练稳定性
-  52  team_news_sentiment    赛前新闻情感
-  53  injury_severity        伤病严重度
-  54  tactical_matchup       战术克制关系
-  56  debutants_in_squad     新人入选数
-  57  squad_height_avg       平均身高
-  59  prev_match_extra_time  上场是否加时
-  60  travel_fatigue         旅途疲劳累积
+  46  key_player_missing     Key player missing through injury or suspension
+  47  missing_caps_pct       Share of caps held by absent players
+  48  missing_goals_pct      Share of goals scored by absent players
+  49  starting_xi_strength   Starting lineup strength
+  50  formation_change       Formation change
+  51  new_manager_matches    Managerial stability
+  52  team_news_sentiment    Pre-match news sentiment
+  53  injury_severity        Injury severity
+  54  tactical_matchup       Tactical matchup
+  56  debutants_in_squad     Number of debutants
+  57  squad_height_avg       Average squad height
+  59  prev_match_extra_time  Extra time in previous match
+  60  travel_fatigue         Accumulated travel fatigue
 """
 import numpy as np
 import pandas as pd

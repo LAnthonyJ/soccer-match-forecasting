@@ -4,7 +4,7 @@ import { formatBeijingTime } from "../components/time.js";
 import { emptyState, errorState, loading, sectionTitle } from "../components/layout.js";
 
 function matchCard(match) {
-  const direction = match.match_direction === "reversed" ? "队伍顺序已自动校正" : "世界杯赛程命中";
+  const direction = match.match_direction === "reversed" ? "Team order corrected" : "World Cup fixture found";
   return `
     <article class="card match-card" data-fixture-id="${match.sportmonks_id || match.fixture_id}">
       <div class="match-row">
@@ -12,8 +12,8 @@ function matchCard(match) {
         <div class="kickoff">vs</div>
         <div class="team away">${match.away_team}</div>
       </div>
-      <div class="kickoff">${match.tournament || "世界杯"} · ${formatBeijingTime(match.kickoff_utc)}</div>
-      <div class="kickoff">${direction} · 点击进入预测详情</div>
+      <div class="kickoff">${match.tournament || "World Cup"} · ${formatBeijingTime(match.kickoff_utc)}</div>
+      <div class="kickoff">${direction} · View forecast details</div>
     </article>
   `;
 }
@@ -21,13 +21,13 @@ function matchCard(match) {
 function formTemplate() {
   return `
     <section class="card search-card">
-      <label>球队 1</label>
-      <input id="homeTeam" class="text-input" placeholder="请输入国家队" autocomplete="off">
+      <label>Team 1</label>
+      <input id="homeTeam" class="text-input" placeholder="Enter a national team" autocomplete="off">
       <div id="homeTeamSuggestions" class="teamSuggestions"></div>
-      <label>球队 2</label>
-      <input id="awayTeam" class="text-input" placeholder="请输入国家队" autocomplete="off">
+      <label>Team 2</label>
+      <input id="awayTeam" class="text-input" placeholder="Enter a national team" autocomplete="off">
       <div id="awayTeamSuggestions" class="teamSuggestions"></div>
-      <button id="searchFixtures" class="primary-button full-width">查询比赛预测</button>
+      <button id="searchFixtures" class="primary-button full-width">Find match forecast</button>
     </section>
     <section id="searchStatus"></section>
     <section id="searchResults"></section>
@@ -45,28 +45,28 @@ function statusPanel(kind, title, body) {
 
 function renderSearchStatus(statusRoot, current) {
   if (current.kind === "idle") {
-    statusRoot.innerHTML = statusPanel("neutral", "准备查询", "输入两支国家队后，系统会优先在 2026 世界杯赛程内做实时匹配。");
+    statusRoot.innerHTML = statusPanel("neutral", "Ready to search", "Enter two national teams to search the 2026 World Cup schedule first.");
     return;
   }
   if (current.kind === "loading") {
-    statusRoot.innerHTML = statusPanel("loading", "正在查询 Sportmonks 实时数据", "先读取世界杯赛程缓存，再做两队精确匹配。");
+    statusRoot.innerHTML = statusPanel("loading", "Querying live Sportmonks data", "Checking the cached schedule for an exact match.");
     return;
   }
   if (current.kind === "success") {
-    const source = current.source === "sportmonks_world_cup" ? "已使用 Sportmonks 世界杯实时数据" : "已使用 Sportmonks 实时数据";
-    const cache = current.cache === "hit" ? "当前命中世界杯赛程缓存。" : "当前已刷新世界杯赛程。";
-    statusRoot.innerHTML = statusPanel("success", source, `找到 ${current.count} 场匹配比赛。${cache}`);
+    const source = current.source === "sportmonks_world_cup" ? "Source: Sportmonks World Cup feed" : "Source: Sportmonks live feed";
+    const cache = current.cache === "hit" ? "Using the cached World Cup schedule." : "World Cup schedule refreshed.";
+    statusRoot.innerHTML = statusPanel("success", source, `Found ${current.count} matching fixtures.${cache}`);
     return;
   }
   if (current.kind === "empty") {
-    statusRoot.innerHTML = statusPanel("neutral", "查询完成", "没有找到这两支国家队在 2026 世界杯赛程中的对阵。");
+    statusRoot.innerHTML = statusPanel("neutral", "Search complete", "No fixture between these teams was found in the 2026 World Cup schedule.");
     return;
   }
   if (current.kind === "warning") {
-    statusRoot.innerHTML = statusPanel("warning", "查询结果不完整", "Sportmonks 返回了降级结果或部分结果，请稍后重试。");
+    statusRoot.innerHTML = statusPanel("warning", "Partial results", "Sportmonks returned partial results. Try again later.");
     return;
   }
-  statusRoot.innerHTML = statusPanel("warning", "查询失败", current.message || "比赛查询未能完成。");
+  statusRoot.innerHTML = statusPanel("warning", "Search failed", current.message || "Could not complete the fixture search.");
 }
 
 function suggestionList(teams) {
@@ -113,7 +113,7 @@ function bindAutocomplete(root, inputId, panelId) {
 }
 
 export function renderSearchPrediction(root) {
-  root.innerHTML = sectionTitle("赛前预测") + formTemplate();
+  root.innerHTML = sectionTitle("Pre-match forecasts") + formTemplate();
   const statusRoot = root.querySelector("#searchStatus");
   const results = root.querySelector("#searchResults");
   renderSearchStatus(statusRoot, { kind: "idle" });
@@ -126,13 +126,13 @@ export function renderSearchPrediction(root) {
     const home = homeInput.dataset.sportmonksName || homeInput.value.trim();
     const away = awayInput.dataset.sportmonksName || awayInput.value.trim();
     if (!home || !away) {
-      renderSearchStatus(statusRoot, { kind: "error", message: "请先输入两支国家队。" });
-      results.innerHTML = errorState({ message: "请先输入两支国家队。" });
+      renderSearchStatus(statusRoot, { kind: "error", message: "Enter both national teams first." });
+      results.innerHTML = errorState({ message: "Enter both national teams first." });
       return;
     }
 
     renderSearchStatus(statusRoot, { kind: "loading" });
-    results.innerHTML = loading("正在查询比赛预测...");
+    results.innerHTML = loading("Searching for match forecasts...");
     try {
       const { data, meta } = await api.searchFixtures({
         home,
@@ -152,7 +152,7 @@ export function renderSearchPrediction(root) {
         renderSearchStatus(statusRoot, { kind: hasWarning ? "warning" : "empty" });
       }
       if (!data.matches.length) {
-        results.innerHTML = emptyState("未找到比赛。请从联想列表中选择标准国家队名称后重试。");
+        results.innerHTML = emptyState("No fixture found. Select the teams from the suggestions and try again.");
         return;
       }
       results.innerHTML = data.matches.map(matchCard).join("");

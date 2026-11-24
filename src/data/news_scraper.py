@@ -1,6 +1,6 @@
 """
 Pre-match news scraper for Chinese football sources.
-Targets: 懂球帝 (dongqiudi.com), 直播吧 (zhibo8.cc).
+Targets: Dongqiudi (dongqiudi.com), Zhibo8 (zhibo8.cc).
 Extracts: injuries, predicted lineups, team news, sentiment.
 
 All sources are accessible from China without VPN.
@@ -53,7 +53,7 @@ MOTIVATION_KEYWORDS = [
 
 
 class DongQiuDiScraper:
-    """Scraper for 懂球帝 (dongqiudi.com) - China's largest football community."""
+    """Scraper for Dongqiudi (dongqiudi.com) - China's largest football community."""
 
     BASE_URL = 'https://www.dongqiudi.com'
 
@@ -83,7 +83,7 @@ class DongQiuDiScraper:
                         'scraped_at': datetime.now().isoformat(),
                     })
         except Exception as e:
-            print(f"  懂球帝 search error for '{team_name}': {e}")
+            print(f"  Dongqiudi search error for '{team_name}': {e}")
 
         return articles
 
@@ -137,7 +137,7 @@ class DongQiuDiScraper:
 
 
 class Zhibo8Scraper:
-    """Scraper for 直播吧 (zhibo8.cc) - major Chinese sports news aggregator.
+    """Scraper for Zhibo8 (zhibo8.cc) - major Chinese sports news aggregator.
     URL pattern: https://news.zhibo8.cc/zuqiu/YYYY-MM-DD/{id}native.htm
     """
 
@@ -181,12 +181,12 @@ class Zhibo8Scraper:
                             'scraped_at': datetime.now().isoformat(),
                         })
             except Exception as e:
-                print(f"  直播吧 error: {e}")
+                print(f"  Zhibo8 error: {e}")
 
         return articles
 
     def get_article_content(self, url: str) -> dict:
-        """Fetch article text from 直播吧."""
+        """Fetch article text from Zhibo8."""
         try:
             resp = requests.get(url, headers=HEADERS, timeout=15)
             resp.encoding = 'utf-8'
@@ -272,9 +272,9 @@ def collect_pre_match_news(home_team: str, away_team: str,
 
     # Search for each team's news
     for team, key in [(home_team, 'home_news'), (away_team, 'away_news')]:
-        # 懂球帝
+        # Dongqiudi
         articles = dongqiudi.search_team_news(team)
-        # 直播吧
+        # Zhibo8
         articles += zhibo8.get_match_previews(team)
 
         # Deduplicate
@@ -356,7 +356,7 @@ if __name__ == '__main__':
     # Quick test: search for news about a national team
     scraper = DongQiuDiScraper()
     articles = scraper.search_team_news('阿根廷')
-    print(f"Found {len(articles)} articles about 阿根廷")
+    print(f"Found {len(articles)} articles about Argentina")
     for a in articles[:5]:
         print(f"  - {a['title'][:80]}")
         print(f"    {a['url']}")

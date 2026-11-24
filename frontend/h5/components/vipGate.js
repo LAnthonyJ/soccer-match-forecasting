@@ -1,9 +1,9 @@
-export function vipGate(title, body = "使用 VIP 卡密查看比分热力图、市场差异、BTTS、大小球和阵容影响。") {
+export function vipGate(title, body = "Use a VIP access code to view score heatmaps, market differences, BTTS, goal totals and lineup effects.") {
   return `
     <section class="card locked">
       <h2>${title}</h2>
       <p>${body}</p>
-      <button class="primary-button" data-route="#/account">前往登录</button>
+      <button class="primary-button" data-route="#/account">Go to sign in</button>
     </section>
   `;
 }

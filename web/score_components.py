@@ -37,13 +37,13 @@ def scoreline_heatmap(score_matrix, home_team: str = "Home", away_team: str = "A
 def top_scorelines_table(score_matrix, n: int = 15):
     """Streamlit dataframe of top N exact scores with visual bars."""
     top = score_matrix.top_scorelines(n)
-    df = pd.DataFrame(top, columns=['主队进球', '客队进球', '概率'])
-    df['比分'] = df['主队进球'].astype(str) + ' - ' + df['客队进球'].astype(str)
-    df['概率'] = df['概率'].apply(lambda x: f'{x:.2%}')
-    df['bar'] = df['概率'].apply(
+    df = pd.DataFrame(top, columns=['Home goals', 'Away goals', 'Probability'])
+    df['Score'] = df['Home goals'].astype(str) + ' - ' + df['Away goals'].astype(str)
+    df['Probability'] = df['Probability'].apply(lambda x: f'{x:.2%}')
+    df['bar'] = df['Probability'].apply(
         lambda x: '█' * int(float(x.strip('%')) / 2)
     )
-    return df[['比分', '概率', 'bar']]
+    return df[['Score', 'Probability', 'bar']]
 
 
 def over_under_gauge(over_prob: float, threshold: float = 2.5):
@@ -99,17 +99,17 @@ def edge_vs_market_display(model_prob: float, market_prob: float,
     edge = model_prob - market_prob
 
     col1, col2, col3 = st.columns(3)
-    col1.metric("模型概率 Model", f"{model_prob:.1%}")
-    col2.metric("市场概率 Market", f"{market_prob:.1%}")
+    col1.metric("Model probability", f"{model_prob:.1%}")
+    col2.metric("Market probability", f"{market_prob:.1%}")
     col3.metric("Edge", f"{edge:+.1%}",
                 delta=f"{edge:+.1%}" if abs(edge) > 0.03 else None)
 
     if edge >= 0.10:
-        st.success(f"🔥 发现 {label} 投注价值！Edge={edge:+.1%}（≥10%阈值）")
+        st.success(f"🔥 {label} meets the model threshold. Edge: {edge:+.1%} (at least 10%)")
     elif edge >= 0.05:
-        st.warning(f"💡 {label} 存在边缘机会 Edge={edge:+.1%}")
+        st.warning(f"💡 {label} has a marginal edge. Edge={edge:+.1%}")
     else:
-        st.info(f"{label} 无明显套利空间（Edge={edge:+.1%}）")
+        st.info(f"{label} has no qualifying edge (edge: {edge:+.1%})")
 
 
 def score_distribution_chart(score_matrix):

@@ -1,6 +1,6 @@
 """
 500.com odds scraper for World Cup matches.
-Extracts match info + 竞彩/European odds from 500.com HTML pages.
+Extracts match info + Chinese football lottery/European odds from 500.com HTML pages.
 """
 import requests
 import re
@@ -29,7 +29,7 @@ def scrape_wc_match_list() -> pd.DataFrame:
     html = r.text
 
     # Extract match info from title attributes
-    # Pattern: title="瑞典VS加拿大数据分析" in shuju links
+    # Match analysis titles in provider data links.
     pattern = re.compile(
         r'title="([^"]+)"[^<]*>.*?shuju-(\d+)\.shtml',
         re.DOTALL
@@ -38,7 +38,7 @@ def scrape_wc_match_list() -> pd.DataFrame:
 
     matches = []
     for title, mid in matches_raw:
-        # Parse "TeamAVSTeamB数据分析" or "TeamAVSTeamB赔率对比"
+        # Strip the provider suffix from a fixture title.
         title_clean = title.replace('数据分析', '').replace('赔率对比', '').replace('百家欧赔', '')
         if 'VS' in title_clean:
             home, rest = title_clean.split('VS', 1)
@@ -71,7 +71,7 @@ def scrape_match_odds(match_id: int) -> dict:
     Scrape odds data for a single match from 500.com.
 
     Returns dict with:
-        home_odds, draw_odds, away_odds (竞彩/decimal format)
+        home_odds, draw_odds, away_odds (Chinese football lottery/decimal format)
         avg_home, avg_draw, avg_away (average European odds)
         bet365_h, bet365_d, bet365_a (bet365 odds)
     """
@@ -92,7 +92,7 @@ def scrape_match_odds(match_id: int) -> dict:
     except Exception as e:
         print(f"  ouzhi page error for {match_id}: {e}")
 
-    # Also try the stats page for 竞彩 specific odds
+    # Also try the stats page for Chinese football lottery specific odds
     if 'avg_home' not in result:
         url2 = f'http://odds.500.com/fenxi/shuju-{match_id}.shtml'
         try:
@@ -108,7 +108,7 @@ def scrape_match_odds(match_id: int) -> dict:
 
 def _parse_ouzhi_page(html: str, match_id: int) -> dict:
     """
-    Parse the European odds (欧指) page.
+    Parse the European odds page.
 
     500.com ouzhi page structure:
     - Each bookmaker has 4 rows: [opening, closing, opening_prob, closing_prob]
@@ -164,7 +164,7 @@ def _parse_ouzhi_page(html: str, match_id: int) -> dict:
 
 def _parse_shuju_page(html: str, match_id: int) -> dict:
     """
-    Parse the data analysis (数据) page as fallback.
+    Parse the data analysis page as fallback.
     Uses same logic as ouzhi page since structure is similar.
     """
     return _parse_ouzhi_page(html, match_id)

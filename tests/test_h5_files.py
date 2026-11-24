@@ -49,13 +49,13 @@ class H5FilesTests(unittest.TestCase):
         self.assertIn('hash !== "#/login"', app_js)
         self.assertIn('window.location.hash = "#/login"', app_js)
         self.assertIn("renderLogin", app_js)
-        self.assertIn(">登录<", login_js)
-        self.assertIn("我的账户", account_js)
+        self.assertIn(">Sign in<", login_js)
+        self.assertIn("My account", account_js)
 
     def test_search_page_uses_prediction_label_and_no_dates(self):
         search_js = (ROOT / "views/searchPrediction.js").read_text(encoding="utf-8")
-        self.assertIn("查询比赛预测", search_js)
-        self.assertIn("请输入国家队", search_js)
+        self.assertIn("Find match forecast", search_js)
+        self.assertIn("Enter a national team", search_js)
         self.assertNotIn("fromDate", search_js)
         self.assertNotIn("toDate", search_js)
 
@@ -68,16 +68,16 @@ class H5FilesTests(unittest.TestCase):
         self.assertIn("formatBeijingTime", matches_js)
         self.assertIn("formatBeijingTime", prediction_js)
         self.assertIn("Asia/Shanghai", time_js)
-        self.assertIn("北京时间", time_js)
+        self.assertIn("Beijing time", time_js)
 
     def test_account_requires_session_unlock_for_profile(self):
         account_js = (ROOT / "views/account.js").read_text(encoding="utf-8")
         self.assertIn("!state.sessionUnlocked", account_js)
-        self.assertIn("请先登录", account_js)
-        self.assertIn("退出登录", account_js)
+        self.assertIn("Sign in first", account_js)
+        self.assertIn("Sign out", account_js)
 
     def test_prediction_view_keeps_ai_and_vip_sections(self):
         prediction_js = (ROOT / "views/prediction.js").read_text(encoding="utf-8")
         self.assertIn("api.prediction(fixtureId, state.userId, state.sessionToken)", prediction_js)
-        self.assertIn("AI 分析", prediction_js)
-        self.assertIn("VIP 数据", prediction_js)
+        self.assertIn("AI analysis", prediction_js)
+        self.assertIn("VIP data", prediction_js)

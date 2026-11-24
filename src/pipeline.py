@@ -87,7 +87,7 @@ def _predict_odds_from_model(matches_df: pd.DataFrame) -> dict:
         probs[outcome] /= total
 
     # Convert to decimal odds with 5% overround (standard bookmaker margin)
-    # For 竞彩, use 12% overround instead
+    # For The competition, use 12% overround instead
     odds = {}
     for outcome in ['home', 'draw', 'away']:
         inflated = probs[outcome] * 1.05

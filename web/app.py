@@ -263,7 +263,7 @@ def predict_match(home_team, away_team, odds_h, odds_d, odds_a):
                 score_results = {'elo': sm, 'dixon_coles': sm, 'xg_poisson': sm,
                                  'ml_poisson': sm, 'ensemble': sm}
                 return probs, score_results, None
-        return None, None, f"未找到 {home_team} vs {away_team} 的特征数据，且比分模型未加载"
+        return None, None, f"No feature data for {home_team} vs {away_team}. The score model is unavailable."
 
     # Fix all directional features when match was found reversed
     if reversed_match:
@@ -310,34 +310,34 @@ st.title("⚽ Football AI Predictor")
 st.caption("National team match prediction engine — powered by Ensemble ML + DeepSeek LLM")
 
 tab1, tab2, tab3, tab4 = st.tabs([
-    "📊 预测 Prediction", "⚽ 比分 Score", "📈 数据面板 Dashboard", "📋 历史记录"
+    "📊 Prediction", "⚽ Score", "📈 Dashboard", "📋 History"
 ])
 
 with tab1:
-    st.header("比赛预测")
+    st.header("Match prediction")
 
     col1, col2, col3 = st.columns(3)
     with col1:
-        home = st.text_input("主队 Home Team", value="Argentina")
+        home = st.text_input("Home team", value="Argentina")
     with col2:
-        away = st.text_input("客队 Away Team", value="Brazil")
+        away = st.text_input("Away team", value="Brazil")
     with col3:
-        tourney = st.selectbox("赛事", ["FIFA World Cup 2026", "UEFA Euro", "Copa América",
+        tourney = st.selectbox("Tournament", ["FIFA World Cup 2026", "UEFA Euro", "Copa América",
                                          "African Cup of Nations", "AFC Asian Cup", "Friendly"])
 
     st.markdown("---")
-    st.subheader("市场赔率 Market Odds（可选）")
+    st.subheader("Market odds (optional)")
 
     col_o1, col_o2, col_o3 = st.columns(3)
     with col_o1:
-        odds_h = st.number_input("主胜赔率", value=2.50, min_value=1.01, step=0.01)
+        odds_h = st.number_input("Home win odds", value=2.50, min_value=1.01, step=0.01)
     with col_o2:
-        odds_d = st.number_input("平局赔率", value=3.20, min_value=1.01, step=0.01)
+        odds_d = st.number_input("Draw odds", value=3.20, min_value=1.01, step=0.01)
     with col_o3:
-        odds_a = st.number_input("客胜赔率", value=2.80, min_value=1.01, step=0.01)
+        odds_a = st.number_input("Away win odds", value=2.80, min_value=1.01, step=0.01)
 
-    if st.button("🔮 生成预测", type="primary", use_container_width=True):
-        with st.spinner("模型计算中..."):
+    if st.button("🔮 Generate prediction", type="primary", use_container_width=True):
+        with st.spinner("Calculating probabilities..."):
             probs, score_results, error = predict_match(home, away, odds_h, odds_d, odds_a)
 
         if error:
@@ -351,12 +351,12 @@ with tab1:
             dc_draw = probs.get('draw_dc', probs['draw'])
             dc_away = probs.get('away_dc', probs['away'])
 
-            st.markdown("**比分模型 Dixon-Coles（推荐参考）**")
+            st.markdown("**Dixon–Coles score model (primary forecast)**")
             pcol1, pcol2, pcol3 = st.columns(3)
             outcomes_dc = [
-                (f"{home}胜", dc_home),
-                ("平局 Draw", dc_draw),
-                (f"{away}胜", dc_away),
+                (f"{home} win", dc_home),
+                ("Draw", dc_draw),
+                (f"{away} win", dc_away),
             ]
             for col, (label, prob) in zip([pcol1, pcol2, pcol3], outcomes_dc):
                 with col:
@@ -364,12 +364,12 @@ with tab1:
                     st.progress(float(prob))
 
             st.markdown("---")
-            st.caption("HDA Ensemble (XGB+LGB) — 可能含主场偏差")
+            st.caption("HDA Ensemble (XGB+LGB) — may contain home-field bias")
             pcol4, pcol5, pcol6 = st.columns(3)
             outcomes = [
-                (f"{home}胜", probs['home'], odds_h),
-                ("平局 Draw", probs['draw'], odds_d),
-                (f"{away}胜", probs['away'], odds_a),
+                (f"{home} win", probs['home'], odds_h),
+                ("Draw", probs['draw'], odds_d),
+                (f"{away} win", probs['away'], odds_a),
             ]
 
             # Market probs
@@ -378,8 +378,8 @@ with tab1:
 
             for col, (label, prob, odd) in zip([pcol4, pcol5, pcol6], outcomes):
                 with col:
-                    st.metric(label, f"{prob:.1%}", f"赔率 {odd:.2f}")
-                    st.progress(float(prob), text=f"市场 {mkt_p[outcomes.index((label, prob, odd))]:.1%}")
+                    st.metric(label, f"{prob:.1%}", f"Odds {odd:.2f}")
+                    st.progress(float(prob), text=f"Market {mkt_p[outcomes.index((label, prob, odd))]:.1%}")
 
             # Score summary below H/D/A bars
             if score_results and 'ensemble' in score_results:
@@ -391,33 +391,33 @@ with tab1:
 
                 st.markdown("---")
                 scol1, scol2, scol3, scol4 = st.columns(4)
-                scol1.metric("预期进球 E[Home]", f"{e_h:.2f}")
-                scol2.metric("预期进球 E[Away]", f"{e_a:.2f}")
+                scol1.metric("Expected home goals", f"{e_h:.2f}")
+                scol2.metric("Expected away goals", f"{e_a:.2f}")
                 scol3.metric("Over 2.5", f"{over_p:.1%}")
                 scol4.metric("BTTS", f"{btts_p:.1%}")
 
-                st.caption("最可能比分: " + " | ".join(
+                st.caption("Most likely scores: " + " | ".join(
                     f"{h}-{a} ({p:.1%})" for h, a, p in top3
                 ))
 
             # Edge indicators (use DC-based probabilities)
             dc_edge = np.array([dc_home, dc_draw, dc_away]) - mkt_p
             best_idx = np.argmax(dc_edge)
-            best_label = [f"{home}胜", "平局", f"{away}胜"][best_idx]
+            best_label = [f"{home} win", "Draw", f"{away} win"][best_idx]
             best_edge = dc_edge[best_idx]
 
             if best_edge >= 0.10:
-                st.success(f"🔥 发现投注价值！{best_label} Edge={best_edge:+.1%}（≥10%阈值）")
+                st.success(f"🔥 Model edge: {best_label} Edge={best_edge:+.1%} (at least 10%)")
             elif best_edge >= 0.05:
-                st.warning(f"💡 {best_label}存在边缘机会 Edge={best_edge:+.1%}（未达10%阈值）")
+                st.warning(f"💡 {best_label} has a marginal edge. Edge={best_edge:+.1%} (below 10%)")
             else:
-                st.info(f"无明显套利空间（最大Edge={best_edge:+.1%}）")
+                st.info(f"No qualifying edge (maximum edge {best_edge:+.1%})")
 
             # LLM Explanation
             st.markdown("---")
-            st.subheader("🤖 AI 分析报告")
+            st.subheader("🤖 AI match analysis")
 
-            with st.spinner("AI 生成分析中..."):
+            with st.spinner("Generating analysis..."):
                 explanation = generate_explanation(
                     home_team=home, away_team=away,
                     model_probs={'home': dc_home, 'draw': dc_draw, 'away': dc_away},
@@ -438,25 +438,25 @@ with tab1:
                 stake_frac = min(kelly * 0.25, 0.05)
 
                 st.markdown("---")
-                st.subheader("💰 投注建议 (Dixon-Coles)")
+                st.subheader("💰 Model recommendation (Dixon-Coles)")
                 bet_col1, bet_col2, bet_col3 = st.columns(3)
-                bet_col1.metric("推荐投注", f"{best_label}", f"赔率 {odds_best:.2f}")
-                bet_col2.metric("建议金额", f"本金 × {stake_frac:.1%}",
+                bet_col1.metric("Selected outcome", f"{best_label}", f"Odds {odds_best:.2f}")
+                bet_col2.metric("Suggested stake", f"Bankroll × {stake_frac:.1%}",
                               f"Kelly {kelly:.1%}", delta=f"Edge {best_edge:+.1%}")
-                bet_col3.metric("模型 vs 市场", f"{prob_best:.1%}", f"市场 {mkt_best:.1%}")
+                bet_col3.metric("Model vs market", f"{prob_best:.1%}", f"Market {mkt_best:.1%}")
 
 
 with tab2:
-    st.header("⚽ 比分预测 Score Prediction")
+    st.header("⚽ Score prediction")
 
     col_s1, col_s2 = st.columns(2)
     with col_s1:
-        score_home = st.text_input("主队", value="Argentina", key="score_home")
+        score_home = st.text_input("Home team", value="Argentina", key="score_home")
     with col_s2:
-        score_away = st.text_input("客队", value="Brazil", key="score_away")
+        score_away = st.text_input("Away team", value="Brazil", key="score_away")
 
-    if st.button("🔮 生成比分预测", type="primary", use_container_width=True, key="score_btn"):
-        with st.spinner("计算比分分布中..."):
+    if st.button("🔮 Generate score prediction", type="primary", use_container_width=True, key="score_btn"):
+        with st.spinner("Calculating the score distribution..."):
             shome = ZH_TO_EN.get(score_home, score_home)
             saway = ZH_TO_EN.get(score_away, score_away)
             full_df = load_data()
@@ -490,7 +490,7 @@ with tab2:
                     score_reversed = True
 
             if smatch.empty:
-                st.error(f"未找到 {shome} vs {saway} 的特征数据")
+                st.error(f"No feature data for {shome} vs {saway}")
             else:
                 if score_reversed:
                     smatch = swap_home_away_features(smatch)
@@ -519,7 +519,7 @@ with tab2:
                         st.plotly_chart(scoreline_heatmap(sm, score_home, score_away),
                                        use_container_width=True)
                     with hcol2:
-                        st.subheader("最可能比分 Top Scorelines")
+                        st.subheader("Most likely scores")
                         st.dataframe(
                             top_scorelines_table(sm, n=15),
                             use_container_width=True,
@@ -550,11 +550,11 @@ with tab2:
 
                     # Model breakdown
                     st.markdown("---")
-                    st.subheader("模型分解 Model Breakdown")
+                    st.subheader("Results by model")
 
                     mcol1, mcol2, mcol3, mcol4 = st.columns(4)
                     model_labels = {
-                        'elo': 'ELO基线',
+                        'elo': 'Elo baseline',
                         'dixon_coles': 'Dixon-Coles',
                         'ml_poisson': 'ML-Poisson',
                         'xg_poisson': 'xG-Poisson',
@@ -569,10 +569,10 @@ with tab2:
                                 st.metric(label, f"{e_h:.1f} - {e_a:.1f}")
                                 st.caption(f"O2.5: {o_p:.1%}")
                 else:
-                    st.warning("比分预测模型未加载。请先运行训练。")
+                    st.warning("Score model unavailable. Train the model first.")
 
 with tab3:
-    st.header("📈 模型性能")
+    st.header("📈 Model performance")
 
     try:
         hist = pd.read_csv('data/predictions/wc2026_predictions.csv')
@@ -589,13 +589,13 @@ with tab3:
                 mkt_lls.append(-np.log(np.clip(mk[act_idx], eps, 1)))
 
             m1, m2, m3 = st.columns(3)
-            m1.metric("已完成预测", f"{len(done)} 场")
-            m2.metric("模型 Avg LogLoss", f"{np.mean(model_lls):.4f}")
-            m3.metric("市场 Avg LogLoss", f"{np.mean(mkt_lls):.4f}",
+            m1.metric("Completed predictions", f"{len(done)} matches")
+            m2.metric("Average model log loss", f"{np.mean(model_lls):.4f}")
+            m3.metric("Average market log loss", f"{np.mean(mkt_lls):.4f}",
                       delta=f"{(np.mean(model_lls)-np.mean(mkt_lls)):.4f}")
 
             # Recent results table
-            st.subheader("最近预测记录")
+            st.subheader("Recent predictions")
             st.dataframe(
                 done[['date', 'match', 'actual', 'model_H', 'mkt_H', 'best_edge']]
                 .sort_values('date', ascending=False)
@@ -603,10 +603,10 @@ with tab3:
                 use_container_width=True,
             )
     except Exception:
-        st.info("暂无历史预测数据")
+        st.info("No prediction history yet.")
 
 with tab4:
-    st.header("📋 投注记录")
+    st.header("📋 Bet history")
     try:
         hist = pd.read_csv('data/predictions/wc2026_predictions.csv')
         bets = hist[(hist['bet_amount'] > 0) & (hist['actual'].notna())]
@@ -620,16 +620,16 @@ with tab4:
             profit = total_return - total_stake
 
             c1, c2, c3 = st.columns(3)
-            c1.metric("总投注", f"{len(bets)} 笔")
-            c2.metric("总投入", f"¥{total_stake:.0f}")
-            c3.metric("总盈亏", f"¥{profit:+.0f}", delta=f"{profit/total_stake*100:+.1f}%")
+            c1.metric("Total bets", f"{len(bets)} bets")
+            c2.metric("Total staked", f"¥{total_stake:.0f}")
+            c3.metric("Net profit/loss", f"¥{profit:+.0f}", delta=f"{profit/total_stake*100:+.1f}%")
 
             st.dataframe(bets[['date', 'match', 'best_edge_outcome', 'bet_amount',
                                 'bet_odds', 'actual']], use_container_width=True)
         else:
-            st.info("暂无投注记录。以 Edge ≥ 10% 为标准，符合条件的下注将在此显示。")
+            st.info("No bets yet. Bets with an edge of at least 10% appear here.")
     except Exception:
-        st.info("暂无投注记录")
+        st.info("No bets yet.")
 
 
 st.markdown("---")

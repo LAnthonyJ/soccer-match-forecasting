@@ -170,27 +170,27 @@ State transitions:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>世界杯预测</title>
+  <title>World Cup forecast</title>
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
   <div class="app-shell">
     <header class="topbar">
       <div>
-        <div class="brand">世界杯预测</div>
-        <div class="subbrand">概率、比分、大小球、赛前信号</div>
+        <div class="brand">World Cup forecast</div>
+        <div class="subbrand">Probabilities, scorelines, goal totals and pre-match signals</div>
       </div>
-      <button id="accountButton" class="icon-button" aria-label="账户">我的</button>
+      <button id="accountButton" class="icon-button" aria-label="Account">Account</button>
     </header>
 
     <main id="app" class="main-view">
-      <section class="loading-view">加载中...</section>
+      <section class="loading-view">Loading...</section>
     </main>
 
     <nav class="bottom-nav">
-      <button data-route="#/matches">比赛</button>
+      <button data-route="#/matches">Matches</button>
       <button data-route="#/subscribe">VIP</button>
-      <button data-route="#/account">账户</button>
+      <button data-route="#/account">Account</button>
     </nav>
   </div>
   <script type="module" src="./app.js"></script>
@@ -581,7 +581,7 @@ Add to `styles.css`:
 `frontend/h5/components/layout.js`:
 
 ```js
-export function loading(label = "加载中...") {
+export function loading(label = "Loading...") {
   return `<section class="loading-view">${label}</section>`;
 }
 
@@ -590,7 +590,7 @@ export function emptyState(label) {
 }
 
 export function errorState(error) {
-  return `<section class="error">${error.message || "请求失败"}</section>`;
+  return `<section class="error">${error.message || "Request failed"}</section>`;
 }
 
 export function sectionTitle(title, action = "") {
@@ -611,15 +611,15 @@ function pct(value) {
 export function probabilityGrid(probabilities) {
   return `
     <div class="prob-grid">
-      <div class="prob-box"><div class="prob-label">主胜</div><div class="prob-value">${pct(probabilities.home)}</div></div>
-      <div class="prob-box"><div class="prob-label">平局</div><div class="prob-value">${pct(probabilities.draw)}</div></div>
-      <div class="prob-box"><div class="prob-label">客胜</div><div class="prob-value">${pct(probabilities.away)}</div></div>
+      <div class="prob-box"><div class="prob-label">home win</div><div class="prob-value">${pct(probabilities.home)}</div></div>
+      <div class="prob-box"><div class="prob-label">draw</div><div class="prob-value">${pct(probabilities.draw)}</div></div>
+      <div class="prob-box"><div class="prob-label">away win</div><div class="prob-value">${pct(probabilities.away)}</div></div>
     </div>
   `;
 }
 
 export function confidenceBadge(confidence) {
-  return `<span class="badge">置信度 ${(confidence * 100).toFixed(0)}%</span>`;
+  return `<span class="badge">Confidence ${(confidence * 100).toFixed(0)}%</span>`;
 }
 ```
 
@@ -680,12 +680,12 @@ Add to `styles.css`:
 `frontend/h5/components/vipGate.js`:
 
 ```js
-export function vipGate(title, body = "开通 VIP 查看比分热力图、市场差异、BTTS、大小球和阵容影响。") {
+export function vipGate(title, body = "Opens the VIP to view the heat fractional effort, market differences, BTTS, balls and array effects.") {
   return `
     <section class="card locked">
       <h2>${title}</h2>
       <p>${body}</p>
-      <button class="primary-button" data-route="#/subscribe">开通 VIP</button>
+      <button class="primary-button" data-route="#/subscribe">Activate VIP</button>
     </section>
   `;
 }
@@ -718,15 +718,15 @@ function matchCard(match) {
 }
 
 export async function renderMatches(root) {
-  root.innerHTML = loading("加载比赛...");
+  root.innerHTML = loading("Load Game...");
   try {
     const { data, meta } = await api.matches(state.userId);
-    const warning = meta?.warning ? `<div class="card locked">数据源暂时不可用，显示空列表。</div>` : "";
+    const warning = meta?.warning ? `<div class="card locked">Data sources are not available for the time being, showing an empty list.</div>` : "";
     if (!data.matches.length) {
-      root.innerHTML = sectionTitle("今日比赛") + warning + emptyState("暂无可展示比赛");
+      root.innerHTML = sectionTitle("Today's matches") + warning + emptyState("There's no show for the game");
       return;
     }
-    root.innerHTML = sectionTitle("今日比赛") + warning + data.matches.map(matchCard).join("");
+    root.innerHTML = sectionTitle("Today's matches") + warning + data.matches.map(matchCard).join("");
     root.querySelectorAll("[data-fixture-id]").forEach((node) => {
       node.addEventListener("click", () => {
         const fixtureId = node.dataset.fixtureId;
@@ -767,20 +767,20 @@ function metaLine(data, meta) {
 function vipSection(data) {
   return `
     <section class="card">
-      <h2>VIP 数据</h2>
+      <h2>VIP data</h2>
       <div class="prob-grid">
         <div class="prob-box"><div class="prob-label">Over 2.5</div><div class="prob-value">${((data.over25 || 0) * 100).toFixed(1)}%</div></div>
         <div class="prob-box"><div class="prob-label">BTTS</div><div class="prob-value">${((data.btts || 0) * 100).toFixed(1)}%</div></div>
-        <div class="prob-box"><div class="prob-label">市场差异</div><div class="prob-value">${data.market_edge ? "有" : "-"}</div></div>
+        <div class="prob-box"><div class="prob-label">Market differences</div><div class="prob-value">${data.market_edge ? "Yes" : "-"}</div></div>
       </div>
-      <h3>Top 15 比分</h3>
+      <h3>Top 15 scorelines</h3>
       ${scorelineList(data.top_scorelines || [], 15)}
     </section>
   `;
 }
 
 export async function renderPrediction(root, fixtureId) {
-  root.innerHTML = loading("加载预测...");
+  root.innerHTML = loading("Load Forecasts...");
   try {
     const basic = await api.prediction(fixtureId, state.userId);
     let vip = null;
@@ -800,10 +800,10 @@ export async function renderPrediction(root, fixtureId) {
         ${probabilityGrid(data.probabilities || {})}
       </section>
       <section class="card">
-        <h2>最可能比分</h2>
+        <h2>Most likely scores</h2>
         ${scorelineList(data.top_scorelines || [], 3)}
       </section>
-      ${vip ? vipSection(data) : vipGate("解锁完整预测")}
+      ${vip ? vipSection(data) : vipGate("Unlock complete forecast")}
     `;
     root.querySelectorAll("[data-route]").forEach((button) => {
       button.addEventListener("click", () => {
@@ -834,9 +834,9 @@ import { errorState, sectionTitle } from "../components/layout.js";
 import { showToast } from "../components/toast.js";
 
 const plans = [
-  { id: "vip_day", name: "日卡", price: "9.90", desc: "适合单日比赛" },
-  { id: "vip_week", name: "周卡", price: "29.90", desc: "覆盖密集赛程" },
-  { id: "vip_month", name: "月卡", price: "99.00", desc: "完整周期跟踪" },
+  { id: "vip_day", name: "Day pass", price: "9.90", desc: "Access for one match day" },
+  { id: "vip_week", name: "Week pass", price: "29.90", desc: "Access throughout a busy fixture week" },
+  { id: "vip_month", name: "Month pass", price: "99.00", desc: "Follow the full match cycle" },
 ];
 
 function planCard(plan) {
@@ -845,17 +845,17 @@ function planCard(plan) {
       <h2>${plan.name}</h2>
       <div class="price">¥${plan.price}</div>
       <p>${plan.desc}</p>
-      <button class="primary-button" data-plan="${plan.id}">开通</button>
+      <button class="primary-button" data-plan="${plan.id}">Activate</button>
     </article>
   `;
 }
 
 export function renderSubscribe(root) {
   root.innerHTML = `
-    ${sectionTitle("开通 VIP")}
+    ${sectionTitle("Activate VIP")}
     <section class="card">
-      <label>用户 ID</label>
-      <input id="userIdInput" class="text-input" value="${state.userId || ""}" placeholder="输入你的用户 ID">
+      <label>User ID</label>
+      <input id="userIdInput" class="text-input" value="${state.userId || ""}" placeholder="Enter your user ID">
     </section>
     ${plans.map(planCard).join("")}
   `;
@@ -863,14 +863,14 @@ export function renderSubscribe(root) {
     button.addEventListener("click", async () => {
       const userId = document.getElementById("userIdInput").value.trim();
       if (!userId) {
-        showToast("请先输入用户 ID");
+        showToast("Enter your user ID");
         return;
       }
       localStorage.setItem("wc_predict_user_id", userId);
       state.userId = userId;
       try {
         const { data } = await api.checkout(userId, button.dataset.plan);
-        showToast(`订单已创建：${data.order_id}`);
+        showToast(`Order created:${data.order_id}`);
         window.location.hash = "#/account";
       } catch (error) {
         root.insertAdjacentHTML("afterbegin", errorState(error));
@@ -911,22 +911,22 @@ import { showToast } from "../components/toast.js";
 
 export async function renderAccount(root) {
   root.innerHTML = `
-    ${sectionTitle("账户")}
+    ${sectionTitle("Account")}
     <section class="card">
-      <label>用户 ID</label>
-      <input id="accountUserId" class="text-input" value="${state.userId || ""}" placeholder="输入用户 ID">
-      <button id="saveUserId" class="primary-button">保存</button>
+      <label>User ID</label>
+      <input id="accountUserId" class="text-input" value="${state.userId || ""}" placeholder="Enter User ID">
+      <button id="saveUserId" class="primary-button">Save</button>
     </section>
-    <section id="subscriptionCard" class="card">加载订阅...</section>
+    <section id="subscriptionCard" class="card">Load Subscriptions...</section>
   `;
   document.getElementById("saveUserId").addEventListener("click", () => {
     setUserId(document.getElementById("accountUserId").value);
-    showToast("已保存");
+    showToast("Saved");
     renderAccount(root);
   });
   const card = document.getElementById("subscriptionCard");
   if (!state.userId) {
-    card.innerHTML = "未设置用户 ID";
+    card.innerHTML = "No User Setup ID";
     return;
   }
   try {
@@ -934,8 +934,8 @@ export async function renderAccount(root) {
     state.subscription = data;
     card.innerHTML = `
       <h2>${data.tier.toUpperCase()}</h2>
-      <p>状态：${data.status}</p>
-      <p>到期：${data.expires_at || "-"}</p>
+      <p>Status: ${data.status}</p>
+      <p>_Other Organiser${data.expires_at || "-"}</p>
     `;
   } catch (error) {
     card.innerHTML = errorState(error);
@@ -973,15 +973,15 @@ async function adminRequest(path, options = {}) {
 }
 
 export async function renderAdminRefresh(root) {
-  root.innerHTML = loading("加载刷新状态...");
+  root.innerHTML = loading("Loading refresh status...");
   try {
     const data = await adminRequest("/api/admin/jobs/refresh/latest");
     root.innerHTML = `
-      ${sectionTitle("刷新任务")}
+      ${sectionTitle("Refresh jobs")}
       <section class="card">
-        <h2>${data.run ? data.run.status : "无记录"}</h2>
+        <h2>${data.run ? data.run.status : "No records"}</h2>
         <pre>${JSON.stringify(data, null, 2)}</pre>
-        <button id="runRefresh" class="primary-button">立即刷新</button>
+        <button id="runRefresh" class="primary-button">Refresh now</button>
       </section>
     `;
     document.getElementById("runRefresh").addEventListener("click", async () => {
