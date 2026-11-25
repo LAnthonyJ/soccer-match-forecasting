@@ -1,11 +1,56 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+import tempfile
 from unittest import TestCase
 from unittest.mock import patch
 
 from epl_agent import data, service
+from epl_agent.evaluation import public_ledger
 
 
 class MatchdeskTests(TestCase):
+    def test_read_only_ledger_and_local_paged_history(self):
+        from epl_agent.web import create_app
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)/"absent"
+            self.assertEqual(public_ledger(root)["records"],[])
+            self.assertFalse(root.exists())
+        client = create_app().test_client()
+        all_rows = client.get("/api/history-rows?season=2024-25").get_json()
+        p1 = client.get("/api/history-rows?season=2024-25&page=1").get_json()
+        p2 = client.get("/api/history-rows?season=2024-25&page=2").get_json()
+        self.assertEqual((len(all_rows),len(p1),len(p2)),(380,20,20))
+        self.assertTrue({r["id"] for r in p1}.isdisjoint(r["id"] for r in p2))
+        self.assertEqual(client.get("/api/history-rows?page=-1").status_code,400)
+
+    def test_next_fixture_and_named_cohorts(self):
+        now = datetime.now(timezone.utc)
+        matches = []
+        for i,opponent in enumerate(("Chelsea","Fulham","Liverpool","Brentford")):
+            when = now + timedelta(days=i-1,minutes=-1 if i==1 else 0)
+            matches.append({"id":str(i),"date":when.date().isoformat(),"kickoff_utc":when.isoformat(),
+                            "season":"2026-27","hg":None,"home":"Arsenal","away":opponent})
+        with patch.object(service,"fixtures",return_value=matches):
+            answer = service.ask("阿森纳下一场踢谁","3")["answer"]
+            self.assertIn("利物浦",answer)
+            self.assertNotIn("富勒姆",answer)
+            trial = {"season":"2026-27","paired":2,"model_loss":1.0,"market_loss":1.05}
+            with patch.object(service,"formal_report",return_value={"seasons":[],"pilot":{"seasons":[trial]}}), \
+                    patch.object(service,"public_ledger",return_value={}):
+                self.assertIn("试运行有 2 场",service.ask("2026-27 试运行成绩")["answer"])
+                self.assertIn("正式评测尚无",service.ask("2026-27 正式评测")["answer"])
+                self.assertIn("历史回放有",service.ask("2025-26 历史回放成绩")["answer"])
+
+    def test_verified_watermark_stops_at_gap_and_advances_after_observed_correction(self):
+        rows = [{"season":"2026-27","date":f"2026-09-0{i}","kickoff_utc":f"2026-09-0{i}T15:00:00Z",
+                 "hg":1,"ag":0,"schedule_status":"verified"} for i in (1,2,3)]
+        rows[1]["result_observed_at"] = "2026-09-06T09:00:00Z"
+        def mark(day):
+            return service.score_watermark(rows,"2026-27",datetime(2026,9,day,tzinfo=timezone.utc))
+        self.assertEqual(mark(5),{"settled_through":"2026-09-01","latest_confirmed_score_date":"2026-09-03"})
+        self.assertEqual(mark(7)["settled_through"],"2026-09-03")
+        rows[0].update(source_conflict=True)
+        self.assertIsNone(mark(7)["settled_through"])
     def test_unknown_kickoff_and_frozen_model_without_prices(self):
         original = next(m for m in data.load_matches() if m["id"]=="2026-27_fulham_manchester-united")
         replay = service.history()[0][original["id"]]

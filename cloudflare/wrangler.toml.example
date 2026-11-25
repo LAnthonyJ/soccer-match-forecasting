@@ -1,0 +1,13 @@
+name = "epl-matchdesk"
+pages_build_output_dir = "./site"
+compatibility_date = "2026-11-25"
+
+[vars]
+# Set after reviewing the published peak cache-miss/input and output tariff.
+PRICING_VALID_UNTIL = ""
+
+[[d1_databases]]
+binding = "DB"
+database_name = "epl-analysis"
+database_id = "REPLACE-WITH-YOUR-D1-UUID"
+migrations_dir = "migrations"

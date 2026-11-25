@@ -1,0 +1,17 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>本场分析依据 · 英超观察台</title><style>body{font:1rem/1.8 system-ui,sans-serif;color:#142937;background:#fafaf4;max-width:48rem;margin:auto;padding:2rem 1.25rem}a{color:#195744}li,p{overflow-wrap:anywhere}</style></head>
+<body><main><a href="./" id="back">返回比赛看板</a><h1>本场分析依据</h1><p id="summary" role="status">正在读取公开事实…</p><ul id="facts"></ul></main>
+<script type="module">
+const id=new URLSearchParams(location.search).get('fixture');
+const status=document.querySelector('#summary');
+async function read(url){const res=await fetch(url);if(!res.ok||!res.headers.get('content-type')?.includes('json'))throw Error();return res.json()}
+try{
+  if(!/^\d{4}-\d{2}_[a-z0-9-]+_[a-z0-9-]+$/.test(id||''))throw Error();
+  document.querySelector('#back').href='./#/match/'+encodeURIComponent(id);
+  let packet;
+  try{packet=await read('./analysis/facts/'+id+'.json')}catch{packet=(await read('./analysis/archive/'+id.slice(0,7)+'.json'))[id]}
+  if(packet.fixture_id!==id)throw Error();
+  status.textContent='数据截止 '+packet.as_of+' · 事实校验值 '+packet.fact_hash;
+  for(const fact of packet.facts){const li=document.createElement('li');li.textContent=fact.text;document.querySelector('#facts').append(li)}
+}catch{status.textContent='未能读取本场分析依据。请确认比赛链接或稍后刷新。'}
+</script></body></html>

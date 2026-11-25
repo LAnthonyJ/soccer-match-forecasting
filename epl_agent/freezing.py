@@ -1,5 +1,5 @@
 """Local freeze entry points shared by the worker and CLI."""
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from functools import lru_cache
 import json
@@ -66,6 +66,25 @@ def prepare(version=None):
     raise ValueError("Registered model artifact is unavailable")
 
 
+@contextmanager
+def current_schedule(match):
+    """Exclude a revision replaced during model I/O, including between the final read and commit."""
+    path = root_dir() / "fixtures.sqlite3"
+    with closing(sqlite3.connect(path.resolve().as_uri()+"?mode=rw", uri=True, timeout=.25)) as db:
+        try:
+            db.execute("BEGIN IMMEDIATE")
+        except sqlite3.OperationalError:
+            yield False
+            return
+        row = db.execute("SELECT payload FROM fixture_versions WHERE id=? ORDER BY observed DESC LIMIT 1",
+                         (match["id"],)).fetchone()
+        latest = json.loads(row[0]) if row else {}
+        keys = ("kickoff_utc","schedule_revision","schedule_observed_at","schedule_status")
+        yield (latest.get("schedule_status") == "verified" and not latest.get("withdrawn")
+               and latest.get("hg") is None and not latest.get("source_conflict")
+               and all(latest.get(key) == match.get(key) for key in keys))
+
+
 def capture(witness=False, *, clock=None, get=None):
     registration = register()
     matches, context = prepare(registration["model"])
@@ -81,7 +100,8 @@ def capture(witness=False, *, clock=None, get=None):
         options["clock"] = clock
     if get is not None:
         options["get"] = get
-    result = collect(matches,single,predict_many=batch,**options)
+    eligible = [m for m in matches if m.get("schedule_status") == "verified"]
+    result = collect(eligible,single,predict_many=batch,check_schedule=current_schedule,**options)
     if witness:
         from .evidence import publish
         try:

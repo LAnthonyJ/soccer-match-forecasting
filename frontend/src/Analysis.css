@@ -1,0 +1,14 @@
+.ai-panel {padding:0; overflow:hidden}
+.ai-entry {display:flex; align-items:center; justify-content:space-between; width:100%; padding:14px 20px; min-height:44px; color:#134b3c; background:#f2f7ec; border:0; font:inherit; font-weight:700; cursor:pointer; text-align:left}
+.ai-entry:focus-visible,.ai-body button:focus-visible,.ai-body input:focus-visible {outline:3px solid #377666; outline-offset:-3px}
+.ai-body {padding:2px 20px 15px; overflow-wrap:anywhere}
+.ai-credit {font-weight:700; color:#275144}
+.ai-section h4 {margin:14px 0 4px}
+.ai-section p,.ai-turn p {margin:2px 0 6px; line-height:1.6}
+.ai-body form {display:flex; align-items:flex-end; gap:8px; margin:16px 0 6px}
+.ai-body form label {display:grid; flex:1; min-width:0; gap:5px; font-weight:600}
+.ai-body input {min-width:0; padding:9px; font:inherit; border:1px solid #819d93; border-radius:6px}
+.ai-body form button {color:white; background:#235545; border:0; border-radius:6px; padding:9px 13px; font:inherit; cursor:pointer}
+.ai-body form button:disabled {background:#59746a; cursor:default}
+.ai-body small {color:#43574f}
+.ai-turn {margin:12px 0; padding:8px 12px; border-left:3px solid #6a976a}

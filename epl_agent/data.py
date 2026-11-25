@@ -322,13 +322,15 @@ def _record_view(db, season, rows, *, source_commit, observed):
     for source in rows:
         row = dict(source)
         old = previous.get(row["id"])
-        tracked = FIELDS + ["source_conflict", "source_observations", "result_source", "schedule_source", "resolution"]
+        tracked = FIELDS + ["source_conflict", "source_observations", "result_source", "schedule_source",
+                            "schedule_status", "schedule_review", "resolution"]
         if old and not old.get("withdrawn") and all(row.get(k) == old.get(k) for k in tracked):
             continue
         if latest == received:
             raise ValueError("Conflicting observations at the same timestamp")
         schedule_changed = (old is None or old.get("withdrawn") or
-                            any(row[k] != old[k] for k in ("date", "kickoff_utc", "round")))
+                            any(row.get(k) != old.get(k) for k in
+                                ("date", "kickoff_utc", "round", "schedule_status", "schedule_source", "schedule_review")))
         result_changed = old is None or (row["hg"], row["ag"]) != (old["hg"], old["ag"])
         schedule_at = row.get("schedule_observed_at", received)
         result_at = row.get("result_observed_at", received)

@@ -8,7 +8,7 @@ from pathlib import Path
 import sqlite3
 from urllib.parse import urlsplit
 
-from . import data
+from . import data, schedule
 
 PRIMARY = "openfootball"
 SECONDARY = "openligadb"
@@ -72,6 +72,14 @@ def _setup(db):
                       AND json_type(prior.payload,'$.source_observations')='object')
         BEGIN
           SELECT RAISE(ABORT, 'A v1 fixture requires a multi-source writer. Restart the old worker.');
+        END;
+        CREATE TRIGGER IF NOT EXISTS prevent_unverified_schedule_overwrite
+        BEFORE INSERT ON fixture_versions
+        WHEN json_type(NEW.payload,'$.source_observations')='object' AND json_type(NEW.payload,'$.schedule_status') IS NULL
+          AND EXISTS (SELECT 1 FROM fixture_versions prior WHERE prior.id=NEW.id
+                      AND json_type(prior.payload,'$.schedule_status')='text')
+        BEGIN
+          SELECT RAISE(ABORT, 'A verified fixture requires a schedule-aware writer.');
         END;
     """)
 
@@ -164,7 +172,7 @@ def _merged(db, season, observed):
                 row.update(hg=s[0],ag=s[1],result_source=SECONDARY,result_observed_at=st)
             elif p == s == (None,None) and prior_conflict:
                 row["source_conflict"] = "score_conflict"
-        result.append(row)
+        result.append(schedule.select(row, observed))
     return result
 
 
@@ -172,6 +180,22 @@ def _secondary(season):
     raw = data._get(URL + season[:4])
     rows = parse_secondary(raw,season)
     return rows,_digest(rows)
+
+
+def reconcile_schedule(db_path, season):
+    """Apply the current reviews to received provider records in a new, atomic local revision."""
+    path = Path(db_path)
+    if not path.is_file():
+        raise ValueError("Synchronize the open fixture sources first")
+    with closing(sqlite3.connect(path,timeout=15)) as db,db:
+        _setup(db)
+        db.execute("BEGIN IMMEDIATE")
+        if not _source_rows(db,season,PRIMARY) or not _source_rows(db,season,SECONDARY):
+            raise ValueError("This season requires observations from both open sources")
+        now = data._utc(datetime.now(timezone.utc))
+        rows = _merged(db,season,now)
+        commit = _digest([(r["id"],r["source_observations"],r.get("schedule_review")) for r in rows])
+        return data._record_view(db,season,rows,source_commit=commit,observed=now)
 
 
 def synchronize(db_path, season, providers=None):
@@ -237,6 +261,13 @@ def health(db_path, season, matches=None, now=None):
     overdue = [m["id"] for m in rows if m["hg"] is None and m.get("kickoff_utc") and
                datetime.fromisoformat(m["kickoff_utc"].replace("Z","+00:00")) < instant - timedelta(days=1)]
     conflicts = [m["id"] for m in rows if m.get("source_conflict")]
+    counts = {status:sum(m.get("schedule_status") == status for m in rows)
+              for status in ("verified","conflict","unconfirmed")}
+    schedule_health = {}
+    if any(counts.values()):
+        schedule_health = {"schedule_verified_count":counts["verified"], "schedule_conflict_count":counts["conflict"],
+                           "schedule_unconfirmed_count":counts["unconfirmed"], "schedule_pending_ids":sorted(
+                               m["id"] for m in rows if m.get("schedule_status") in ("conflict","unconfirmed"))}
     sources = {p:dict(provider=p,last_success_at=None,last_attempt_at=None,status="never",revision=None,license=license_id)
                for p,license_id in LICENSES.items()}
     db = _readable(db_path)
@@ -265,7 +296,7 @@ def health(db_path, season, matches=None, now=None):
     return dict(season=season,last_scored_date=max((m["date"] for m in settled),default=None),
                 last_sync_at=max((s["last_success_at"] for s in sources.values() if s["last_success_at"]),default=None),
                 completed=len(settled),total=len(rows),overdue_count=len(overdue),overdue_ids=sorted(overdue),
-                conflict_count=len(conflicts),conflict_ids=sorted(conflicts),sources=list(sources.values()))
+                conflict_count=len(conflicts),conflict_ids=sorted(conflicts),sources=list(sources.values()),**schedule_health)
 
 
 def overlay(db_path, season=None, as_of=None):

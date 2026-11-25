@@ -74,6 +74,50 @@ jobs:
           else
             python -m epl_agent export site
           fi
+      - name: Prepare optional public analysis host
+        if: vars.EPL_CF_PAGES_PROJECT != '' && steps.data.outputs.sha != ''
+        run: python scripts/analysis_release.py cloud site
+      - uses: actions/setup-node@v4
+        if: vars.EPL_CF_PAGES_PROJECT != '' && steps.data.outputs.sha != ''
+        with:
+          node-version: 24
+      - name: Publish the same verified batch to the configured free Cloudflare project
+        id: analysis
+        if: vars.EPL_CF_PAGES_PROJECT != '' && steps.data.outputs.sha != ''
+        continue-on-error: true
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_D1_DATABASE_ID: ${{ vars.CLOUDFLARE_D1_DATABASE_ID }}
+          EPL_CF_PAGES_PROJECT: ${{ vars.EPL_CF_PAGES_PROJECT }}
+          EPL_PRICING_VALID_UNTIL: ${{ vars.EPL_PRICING_VALID_UNTIL }}
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run configure
+          npx --no-install wrangler d1 migrations apply DB --remote
+          npx --no-install wrangler pages deploy site --project-name "$EPL_CF_PAGES_PROJECT" --branch epl-v1
+      - name: Recover published reports and warm the verified round
+        if: vars.EPL_CF_PAGES_PROJECT != '' && steps.data.outputs.sha != ''
+        env:
+          EPL_CF_PAGES_PROJECT: ${{ vars.EPL_CF_PAGES_PROJECT }}
+          EPL_PREVIOUS_PAGES: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
+          SNAPSHOT_SHA: ${{ steps.data.outputs.sha }}
+          DEPLOY_OUTCOME: ${{ steps.analysis.outcome }}
+        run: |
+          set -euo pipefail
+          [[ "$EPL_CF_PAGES_PROJECT" =~ ^[a-z0-9-]+$ ]]
+          export EPL_ANALYSIS_ORIGIN="https://${EPL_CF_PAGES_PROJECT}.pages.dev"
+          warm=()
+          if [[ "$DEPLOY_OUTCOME" == success ]]; then
+            for attempt in {1..10}; do
+              if [[ "$(curl -fsS --max-time 5 "$EPL_ANALYSIS_ORIGIN/public-data-commit.txt" || true)" == "$SNAPSHOT_SHA" ]]; then warm=(--warm); break; fi
+              sleep 3
+            done
+          fi
+          if (( ${#warm[@]} == 0 )); then echo '::warning::Analysis deployment has not confirmed this public batch. Keeping the read-only replay available.'; fi
+          python scripts/analysis_release.py mirror site "${warm[@]}"
       - uses: actions/upload-pages-artifact@v3
         id: artifact
         with:

@@ -66,3 +66,12 @@ Users can capture new EPL quotes using their own free key. The operator retains 
 同步命令记录本机首次看到赛程及其修订的 UTC 时间。历史包用于重建赛前特征，正式市场比较只使用带有实际赛前观测证据的前瞻记录。
 
 当季同步会使用 OpenLigaDB 的常规时间终场比分补缺。主客队和赛季须精确对应。两源比分冲突时暂停结算。看板分别显示比分覆盖日期、同步成功时间和开球超过 24 小时仍待补的场数。合并数据库按 ODbL 1.0 署名分发，原始 CC0 历史比分可以独立使用。
+# 赛程时间核准 / Kickoff verification
+
+当前赛程按赛季、规范主队和客队逐场对齐 openfootball 与 OpenLigaDB。双方实际收到的 UTC 一致时可用于定时。时间冲突时，每场必须有与当前两个候选时间精确匹配的审核记录。单源、缺时或未裁决的冲突保留原始候选，公开的核准时间为空。每次换源、改时、撤销或恢复产生新的本地修订。首次可用时点取采集机写入时间。
+
+已发布的审核只记录来源选择、开放数据候选的 SHA-256、审核时间和依据定位。日期、时间及比分来自各自标注许可的开放来源。核查第 12 轮时两个开放来源有八场不一致。可从英超官网搜索文章 4675097，并按队名核对。森林对埃弗顿的后续改期另参见两队的售票公告。 [Premier League](https://www.premierleague.com/) · [Everton](https://www.evertonfc.com/news/2026/november/20/nottingham-forest-v-everton-ticket-news/)
+
+维护者可通过 `epl-agent schedule candidates 比赛ID` 查看双方 UTC、接收时点、审核状态和指纹。在 `epl_agent/assets/schedule/reviews.json` 追加对当前指纹的逐场决定，记录公开依据与真实审核时间，保留历史条目。用 `epl-agent schedule reconcile --season 2026-27` 对已同步的本地观测应用决定，也可在下一次比赛源同步时自动应用。来源给出新时间时，旧决定无法匹配新的候选。
+
+The collector compares both locally received timestamps. Conflicting candidates require a documented review bound to the exact fixture and the two open-source values. Unresolved fixtures keep their candidate records and a null verified kickoff. The freeze rechecks the current schedule revision under the fixture database lock immediately before committing. A later review takes effect on the receiving machine when it writes the revision. The v3 snapshot publishes these decisions and their evidence, and its reader retains the original v1 and v2 scoring rules.

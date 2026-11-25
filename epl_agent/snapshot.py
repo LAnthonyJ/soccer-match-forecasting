@@ -9,13 +9,14 @@ from tempfile import NamedTemporaryFile
 
 import requests
 
-from . import data
+from . import data, schedule
 from .evidence import audit_public, store_collector_audit
 from .evaluation import formal_report, public_ledger
 from .market import PROTOCOL, canonical, digest, instant, root_dir
 
 LEGACY_FORMAT = "public-snapshot/v1"
-FORMAT = "public-snapshot/v2"
+OPERATIONS_FORMAT = "public-snapshot/v2"
+FORMAT = "public-snapshot/v3"
 NAME = "snapshot.json"
 BRANCH = "public-data"
 UTC = timezone.utc
@@ -46,17 +47,34 @@ def _flat(value, fields):
         _scalars(v)
 
 
-def _fixture_shape(row):
-    _only(row,FIXTURE_KEYS)
+def _fixture_shape(row, version):
+    _only(row,FIXTURE_KEYS | ({"schedule_review"} if version == FORMAT else set()))
     for key,value in row.items():
         if key=="source_observations":
             _only(value,"openfootball openligadb")
             for ref in value.values():
                 _flat(ref,"fixture_id observed_at revision date kickoff_utc hg ag")
+        elif key=="schedule_review":
+            _flat(value,"provider observed_at evidence reference fingerprint")
         elif key=="resolution":
             _flat(value,"provider observed_at evidence note")
         else:
             _scalars(value)
+    if version == FORMAT and "schedule_status" in row and not row.get("withdrawn"):
+        refs = row.get("source_observations") or {}
+        if any(ref.get("observed_at") and instant(ref["observed_at"]) > instant(row["observed_at"])
+               for ref in refs.values()):
+            raise ValueError("A kickoff candidate arrived after its fixture revision")
+        candidate = {"id":row["id"], "source_observations":refs}
+        expected = schedule.select(candidate, data._utc(row["observed_at"]))
+        fields = ["schedule_status", "schedule_source", "kickoff_utc", "schedule_review"]
+        if expected.get("kickoff_utc"):
+            fields.append("date")
+            if not row.get("schedule_observed_at") or (row.get("schedule_review") and
+                    instant(row["schedule_observed_at"]) < instant(row["schedule_review"]["observed_at"])):
+                raise ValueError("Invalid verified kickoff receipt")
+        if any(row.get(k) != expected.get(k) for k in fields):
+            raise ValueError("Schedule decision disagrees with the exact source candidates")
 
 
 def _record_shape(row, version):
@@ -161,13 +179,20 @@ def _validate(batch, version=FORMAT):
     previous_version = {}
     for key in ("versions","fixtures"):
         for m in batch[key]:
-            _fixture_shape(m)
+            _fixture_shape(m,version)
             if m["id"]!=data.fixture_id(m["season"],m["home"],m["away"]):
                 raise ValueError("Fixture identity mismatch")
             if any(instant(m[t])>as_of for t in ("observed_at","result_observed_at","schedule_observed_at") if m.get(t)):
                 raise ValueError("A fixture observation is newer than its snapshot")
             if key=="versions":
                 seen = instant(m["observed_at"])
+                prior = latest.get(m["id"]) or {}
+                if version == FORMAT and m.get("schedule_status") == "verified" and not m.get("withdrawn"):
+                    changed = any(prior.get(k) != m.get(k) for k in (
+                        "schedule_status","date","kickoff_utc","round","schedule_source","schedule_review","withdrawn"))
+                    expected = m["observed_at"] if changed else prior.get("schedule_observed_at")
+                    if not expected or instant(m["schedule_observed_at"]) != instant(expected):
+                        raise ValueError("Verified kickoff was backdated or detached from its revision")
                 if m["id"] in previous_version and seen<=previous_version[m["id"]]:
                     raise ValueError("Duplicate or out-of-order public fixture revision")
                 previous_version[m["id"]] = seen
@@ -192,7 +217,15 @@ def _validate(batch, version=FORMAT):
     for season,health in batch["seasons_health"].items():
         if season not in groups or health.get("season")!=season:
             raise ValueError("Data health season mismatch")
-        _only(health,"season last_scored_date last_sync_at completed total overdue_count overdue_ids conflict_count conflict_ids sources")
+        timing = " schedule_verified_count schedule_conflict_count schedule_unconfirmed_count schedule_pending_ids" if version == FORMAT else ""
+        _only(health,"season last_scored_date last_sync_at completed total overdue_count overdue_ids conflict_count conflict_ids sources"+timing)
+        if version == FORMAT and any("schedule_status" in m for m in groups[season]):
+            expected = data.season_health(None,season,groups[season],as_of)
+            for k in ("total","completed","last_scored_date","overdue_ids","overdue_count","conflict_ids",
+                      "conflict_count","schedule_verified_count","schedule_conflict_count",
+                      "schedule_unconfirmed_count","schedule_pending_ids"):
+                if expected.get(k) != health.get(k):
+                    raise ValueError("Published fixture health differs from the versioned schedule")
         for k,v in health.items():
             if k!="sources":
                 _scalars(v)
@@ -224,6 +257,7 @@ def expected_issue():
 def _check(batch, issue, session=None, *, version=FORMAT):
     as_of = _validate(batch,version)
     ledger = dict(batch["ledger"])
+    ledger["require_schedule_proof"] = version == FORMAT
     if version == LEGACY_FORMAT:
         # Derived only after schema validation. Reproduce v1's published paired scores on replay.
         ledger["legacy_pair_window"] = True
@@ -294,7 +328,7 @@ def _verify_bytes(contents, session=None):
         raise ValueError("Snapshot exceeds supported size")
     envelope = json.loads(contents)
     _only(envelope,"format sha256 data scores")
-    if envelope["format"] not in (FORMAT,LEGACY_FORMAT) or digest(envelope["data"])!=envelope["sha256"]:
+    if envelope["format"] not in (FORMAT,OPERATIONS_FORMAT,LEGACY_FORMAT) or digest(envelope["data"])!=envelope["sha256"]:
         raise ValueError("Invalid public snapshot format or SHA-256")
     batch,scores = _check(envelope["data"],expected_issue(),session,version=envelope["format"])
     if canonical(envelope["scores"])!=canonical(scores):

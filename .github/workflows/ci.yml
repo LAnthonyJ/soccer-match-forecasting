@@ -28,6 +28,9 @@ jobs:
       - run: python scripts/check_release.py
   frontend:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        engine: [chromium, webkit]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -43,7 +46,12 @@ jobs:
         working-directory: frontend
       - run: npm run build
         working-directory: frontend
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install --with-deps ${{ matrix.engine }}
         working-directory: frontend
       - run: npm run test:browser
         working-directory: frontend
+        env:
+          EPL_BROWSER_ENGINE: ${{ matrix.engine }}
+      - name: Test the analysis gateway and cost limits offline
+        if: matrix.engine == 'chromium'
+        run: node --test cloudflare/test/*.test.mjs

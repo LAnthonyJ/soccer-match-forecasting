@@ -6,7 +6,7 @@ import os
 import sqlite3
 import uuid
 from collections import defaultdict
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -141,7 +141,8 @@ def market_consensus(event, receipt):
 def scheduled(matches, now):
     due = []
     for match in matches:
-        if match.get("hg") is not None or not match.get("kickoff_utc"):
+        if (match.get("hg") is not None or not match.get("kickoff_utc")
+                or match.get("schedule_status") in ("conflict","unconfirmed")):
             continue
         cutoff = instant(match["kickoff_utc"])-timedelta(hours=24)
         if cutoff-timedelta(minutes=15) <= now <= cutoff:
@@ -157,13 +158,15 @@ def _record_missed(db, matches, now, registered):
     # Keep gaps even when the operator's worker was offline for the entire window.
     missed = []
     for m in matches:
-        if not m.get("kickoff_utc"):
+        if not m.get("kickoff_utc") or m.get("schedule_status") in ("conflict","unconfirmed"):
             continue
         cutoff = instant(m["kickoff_utc"]) - timedelta(days=1)
         if registered <= cutoff < now:
-            missed.append((*_fixture_key(m), now.isoformat()))
+            seen = m.get("schedule_observed_at")
+            reason = "missed_window" if seen and instant(seen) <= cutoff else "schedule_unverified"
+            missed.append((*_fixture_key(m), now.isoformat(), reason, reason))
     db.executemany("""INSERT INTO captures(fixture,kickoff,revision,received,reason,freeze_reason)
-        VALUES(?,?,?,?,'missed_window','missed_window') ON CONFLICT(fixture,kickoff,revision) DO NOTHING""", missed)
+        VALUES(?,?,?,?,?,?) ON CONFLICT(fixture,kickoff,revision) DO NOTHING""", missed)
     db.execute("""UPDATE captures SET freeze_reason='missed_window', reason='missed_window',
         market_reason=COALESCE(market_reason, CASE WHEN reason IN
           ('missing_api_key','quota_reserve','provider_unavailable','event_missing','insufficient_books') THEN reason END)
@@ -313,7 +316,7 @@ def _prepare(db, due, events, received, poll_reason, owner):
     return groups, reason
 
 
-def _store_freeze(db, owner, reg, work, cutoff, observed, result, clock):
+def _store_freeze(db, owner, reg, work, cutoff, observed, result, clock, schedule_current):
     match, candidate, market_reason = work
     key = _fixture_key(match)
     db.execute("BEGIN IMMEDIATE")
@@ -322,7 +325,9 @@ def _store_freeze(db, owner, reg, work, cutoff, observed, result, clock):
         db.commit()
         return 0, "already_claimed"
     frozen = clock()
-    if frozen > cutoff or frozen < observed:
+    if not schedule_current:
+        reason = "schedule_unverified"
+    elif frozen > cutoff or frozen < observed:
         reason = "late_generation"
     elif not isinstance(result,dict):
         reason = "prediction_error"
@@ -361,7 +366,8 @@ def _store_freeze(db, owner, reg, work, cutoff, observed, result, clock):
     return 0, reason
 
 
-def collect(matches, predict, root=None, *, predict_many=None, clock=lambda: datetime.now(UTC), get=requests.get):
+def collect(matches, predict, root=None, *, predict_many=None, clock=lambda: datetime.now(UTC), get=requests.get,
+            check_schedule=None):
     """Sample the shared feed, then durably freeze each eligible fixture independently."""
     now = clock()
     owner = uuid.uuid4().hex
@@ -403,7 +409,8 @@ def collect(matches, predict, root=None, *, predict_many=None, clock=lambda: dat
                         result = None
                 else:
                     result = predictions.get(match["id"])
-                changed, reason = _store_freeze(db,owner,reg,work,cutoff,observed,result,clock)
+                with (check_schedule(match) if check_schedule else nullcontext(True)) as schedule_current:
+                    changed, reason = _store_freeze(db,owner,reg,work,cutoff,observed,result,clock,schedule_current)
                 count += changed
         write_value(db,"last_capture",{"at":received.isoformat(),"status":reason,"fixtures":len(due)})
         return {"status":reason,"captured":count}

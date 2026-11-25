@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from . import data, lifecycle, models, operations
+from . import data, lifecycle, models, operations, schedule
 from .evaluation import formal_report, public_ledger
 from .market import instant, root_dir
 
@@ -17,7 +17,8 @@ STATIC = Path(__file__).with_name("static")
 
 def fixtures():
     db = root_dir() / "fixtures.sqlite3"
-    return data.load_matches(db if db.exists() else None)
+    now = datetime.now(UTC)
+    return [schedule.public_fixture(m,now) for m in data.load_matches(db if db.exists() else None)]
 
 
 def model_dir():
@@ -52,6 +53,15 @@ def historical_rows(*, snapshot=None):
     return scores.get("rows", [])
 
 
+HISTORY_PAGE_SIZE = 20
+
+
+def history_pages(rows):
+    ordered = sorted(rows,key=lambda m:(-date.fromisoformat(m["date"]).toordinal(),m["id"]))
+    for i in range(0,len(ordered),HISTORY_PAGE_SIZE):
+        yield ordered[i:i+HISTORY_PAGE_SIZE]
+
+
 def _history_for(snapshot):
     # An independently verified export uses only repository-pinned historical artifacts.
     return cached_history(None, 0) if snapshot is not None else history()
@@ -61,7 +71,8 @@ def format_prediction(raw, source, market=None, b=None):
     return {"a": raw["probs"], "market": market, "b": b, "xg": raw["xg"],
             "top_scores": [[s["home"], s["away"], s["prob"]] for s in raw["top_scores"]],
             "samples": [raw["samples"][k] for k in ("home", "away")], "form": raw.get("form", {}),
-            "model_version": raw["model_version"], "cutoff": raw["cutoff"], "source": source}
+            "model_version": raw["model_version"], "cutoff": raw["cutoff"], "trained_through":raw.get("trained_through"),
+            "form_window":raw.get("form_window"), "source": source}
 
 
 REASONS = {
@@ -81,6 +92,7 @@ REASONS = {
     "missing_market": "缺少合格的同期市场报价", "no_event": "该场暂无市场报价",
     "unverified_observation": "报价接收时点与已确认赛程不符", "model_version_changed": "模型版本与注册记录不符",
     "frozen": "模型 A 已在赛前冻结",
+    "schedule_conflict":"两家来源的开球时间不一致，等待核实", "schedule_unconfirmed":"计划开球时间尚待核实",
 }
 
 
@@ -126,6 +138,16 @@ def item(match, raw=None, kind="replay", market=None, b=None, *, reason=None, fr
     row["freeze_reason"] = freeze_reason
     row["freeze_note"] = REASONS.get(freeze_reason, freeze_reason or "")
     row["evidence"] = evidence
+    for key in ("schedule_status","schedule_source","schedule_review"):
+        if match.get(key) is not None:
+            row[key] = match[key]
+    if not match.get("kickoff_utc") and match.get("schedule_status") in ("conflict","unconfirmed"):
+        row["freeze_reason"] = "schedule_"+match["schedule_status"]
+        row["freeze_note"] = REASONS[row["freeze_reason"]]
+    sources = match.get("source_observations") or {}
+    row["score_sources"] = {provider:{"observed_at":obs.get("observed_at"),
+                            "score":[obs["hg"],obs["ag"]] if obs.get("hg") is not None and obs.get("ag") is not None else None}
+                            for provider,obs in sources.items() if isinstance(obs,dict)}
     if raw:
         row["explanation"] = explain(row)
         row["draw_explanation"] = explain(row,"draw")
@@ -206,30 +228,99 @@ def _present(targets, matches, ledger, now, snapshot=None):
 
 def _current_id(games, now):
     season = max((m["season"] for m in games), default=None)
-    scheduled = [m for m in games if m["season"] == season and m["kickoff_utc"]]
-    future = [m for m in scheduled if instant(m["kickoff_utc"]) >= now]
-    chosen = min(future,key=lambda m:m["kickoff_utc"]) if future else max(scheduled,key=lambda m:m["kickoff_utc"],default=None)
+    scheduled = [m for m in games if m["season"] == season]
+    today = now.astimezone(data.LONDON).date().isoformat()
+    future = [m for m in scheduled if m.get("hg") is None and
+              (instant(m["kickoff_utc"])>=now if m.get("kickoff_utc") else m["date"]>=today)]
+    key = lambda m:(m["date"],m.get("kickoff_utc") or "",m["id"])
+    chosen = min(future,key=key) if future else max(scheduled,key=key,default=None)
     return chosen["id"] if chosen else None
 
 
-def dashboard(season=None, *, static=False, all_seasons=False, snapshot=None):
+def _week(m):
+    if m.get("round") is not None:
+        text = str(m["round"])
+        n = re.fullmatch(r"(?:(?:round|matchday|week)\s*)?(\d+)",text,re.I)
+        return "第 "+n[1]+" 轮" if n else text
+    day = date.fromisoformat(m["date"])
+    return (day-timedelta(days=day.weekday())).isoformat()+" 周"
+
+
+def board_view(full):
+    games = full["fixtures"]
+    anchors = {m["id"]:m for m in games if m["id"] in (full["current_id"],full["default_id"])}
+    weeks = {(m["season"],_week(m)) for m in anchors.values()}
+    cards = []
+    for m in games:
+        if m["id"]==full["default_id"]:
+            cards.append(m)
+        elif (m["season"],_week(m)) in weeks:
+            card = {k:m.get(k) for k in ("id","season","round","date","kickoff_utc","home","away","home_zh",
+                                         "away_zh","hg","ag","source_conflict","schedule_status")}
+            p = m["prediction"]
+            card.update(partial=True,prediction={"source":p["source"],"a":p["a"]} if p else None)
+            cards.append(card)
+    result = dict(full, compact=True, fixtures=cards)
+    r = full["report"]
+    result["report"] = {"n_pairs":r["n_pairs"],"status":r["status"],"seasons":r["seasons"],
+                        "pilot":{"seasons":r.get("pilot",{}).get("seasons",[])},
+                        "history":{"n":r["history"]["n"],"seasons":r["history"]["seasons"]}}
+    result["week_catalog"] = full.get("week_catalog") or {s:sorted({_week(m) for m in games if m["season"]==s}) for s in {m["season"] for m in games}}
+    return result
+
+
+def score_watermark(matches,season,as_of):
+    """Last fully settled date across the verified schedule, plus the newest individual result."""
+    days = {}
+    confirmed_dates = []
+    for m in matches:
+        if m["season"]!=season:
+            continue
+        observed = m.get("result_observed_at")
+        known = (m.get("hg") is not None and m.get("ag") is not None and not m.get("source_conflict")
+                 and (not observed or instant(observed)<=as_of) and m["date"]<=as_of.astimezone(data.LONDON).date().isoformat())
+        if known:
+            confirmed_dates.append(m["date"])
+        if m.get("schedule_status")=="verified" and m.get("kickoff_utc"):
+            kickoff = instant(m["kickoff_utc"])
+            day = kickoff.astimezone(data.LONDON).date().isoformat()
+            days.setdefault(day,[]).append(known and kickoff + timedelta(days=1)<=as_of)
+    through = None
+    for day,complete in sorted(days.items()):
+        if not all(complete):
+            break
+        through = day
+    return {"settled_through":through,"latest_confirmed_score_date":max(confirmed_dates,default=None)}
+
+
+def dashboard(season=None, *, static=False, all_seasons=False, snapshot=None, compact=False):
     now = instant(snapshot["as_of"]) if snapshot is not None else datetime.now(UTC)
     if snapshot is None:
         matches, ledger = fixtures(), public_ledger()
+        scoring_fixtures = matches
     else:
         # Package older seasons with unchanged CC0 records. The public season list is authoritative.
         supplied = snapshot["fixtures"]
         seasons_in_snapshot = {m["season"] for m in supplied}
-        matches = [m for m in data.load_matches() if m["season"] not in seasons_in_snapshot] + supplied
+        scoring_fixtures = [m for m in data.load_matches() if m["season"] not in seasons_in_snapshot] + supplied
+        matches = [schedule.public_fixture(m,now) for m in scoring_fixtures]
         ledger = snapshot["ledger"]
     years = sorted({m["season"] for m in matches})
     if season and season not in years:
         raise ValueError("未知赛季")
     selected = years if all_seasons else [season] if season else years[-(2 if static else 3):]
     targets = sorted((m for m in matches if m["season"] in selected),key=lambda m:(m["date"],m["kickoff_utc"] or "",m["id"]))
+    current_id = _current_id(targets,now)
+    if compact:
+        week_catalog = {s:sorted({_week(m) for m in targets if m["season"]==s}) for s in selected}
+        replays = _history_for(snapshot)[0]
+        example = next((m for m in reversed(targets) if m.get("hg") is not None and m.get("kickoff_utc")
+                        and m["id"] in replays and models.replay_matches(replays[m["id"]],m)),None)
+        weeks = {(m["season"],_week(m)) for m in targets if m["id"]==current_id or m is example}
+        targets = [m for m in targets if (m["season"],_week(m)) in weeks]
     output = _present(targets,matches,ledger,now,snapshot)
     example = next((r for r in reversed(output) if r["prediction"] and r["prediction"]["source"]=="replay" and r["hg"] is not None),None)
-    report = formal_report(matches,ledger,now)
+    report = formal_report(scoring_fixtures,ledger,now)
     _attach_trace(output,matches,ledger,report,now,snapshot)
     scores = _history_for(snapshot)[1]
     report["history"] = {k:v for k,v in scores.items() if k != "rows"}
@@ -238,16 +329,18 @@ def dashboard(season=None, *, static=False, all_seasons=False, snapshot=None):
         health = data.season_health(root_dir()/"fixtures.sqlite3",health_season,matches=matches,now=now)
     else:
         health = snapshot["seasons_health"].get(health_season) or snapshot["health"]
+    health = dict(health,**score_watermark(matches,health_season,now))
     complete = [s for s,count in Counter(m["season"] for m in matches if m["hg"] is not None and not m.get("source_conflict")).items() if count == 380]
     latest = max((r for r in matches if r.get("observed_at")),key=lambda r:r["observed_at"],default={})
     state = operations.public_state() if snapshot is None else snapshot.get("operations",{})
     status = operations.status(matches,ledger,health,now,state,snapshot_at=snapshot["as_of"] if snapshot else None)
-    return {"operations":status,"fixtures":output, "report":report, "default_id":example["id"] if example else _current_id(output,now),
-            "current_id":_current_id(output,now), "available_seasons":selected if static else years,
+    result = {"operations":status,"fixtures":output, "report":report, "default_id":example["id"] if example else current_id,
+            "current_id":current_id, "available_seasons":selected if static else years,
             "updated_at":now.isoformat(), "health":health, "last_complete_season":max(complete,default=None), "archive_seasons":years,
             "data_version":latest.get("source_commit") or data.read_coverage()["source_commit"],
             "last_change_observed_at":latest.get("observed_at"), "last_scored_date":health.get("last_scored_date"),
             "team_aliases":data.ALIASES, "public_snapshot":snapshot is not None}
+    return board_view(dict(result,week_catalog=week_catalog)) if compact else result
 
 
 def _attach_trace(games,matches,ledger,report,now,snapshot=None):
@@ -258,7 +351,24 @@ def _attach_trace(games,matches,ledger,report,now,snapshot=None):
 
 def export_history_assets(directory, dashboard_dict, *, snapshot=None):
     directory = Path(directory)
-    (directory/"history-rows.json").write_text(json.dumps(historical_rows(snapshot=snapshot),ensure_ascii=False,separators=(",",":")),encoding="utf8")
+    def save(path,value):
+        path.write_text(json.dumps(value,ensure_ascii=False,separators=(",",":")),encoding="utf8")
+    archive = historical_rows(snapshot=snapshot)
+    save(directory/"history-rows.json",archive)
+    history_dir = directory/"history"
+    history_dir.mkdir(exist_ok=True)
+    by_year = {}
+    for row in archive:
+        by_year.setdefault(row["season"],[]).append(row)
+    for year,rows in {"all":archive,**by_year}.items():
+        if year!="all":
+            save(history_dir/(year+".json"),rows)
+        page_dir = history_dir/year
+        page_dir.mkdir(exist_ok=True)
+        for i,chunk in enumerate(history_pages(rows),1):
+            save(page_dir/f"{i}.json",chunk)
+    save(directory/"report.json",dashboard_dict["report"])
+    save(directory/"board.json",board_view(dashboard_dict))
     # Older history remains addressable without putting every season in the initial download.
     included = set(dashboard_dict["available_seasons"])
     if snapshot is None:
@@ -274,6 +384,8 @@ def export_history_assets(directory, dashboard_dict, *, snapshot=None):
     replays = _history_for(snapshot)[0]
     season_dir = directory/"seasons"
     season_dir.mkdir(exist_ok=True)
+    for year in included:
+        save(season_dir/(year+".json"),[m for m in dashboard_dict["fixtures"] if m["season"]==year])
     for season in sorted({m["season"] for m in older}):
         rows = []
         for m in older:
@@ -295,6 +407,24 @@ def export_history_assets(directory, dashboard_dict, *, snapshot=None):
         (season_dir/(season+".json")).write_text(json.dumps(rows,ensure_ascii=False,separators=(",",":")),encoding="utf8")
 
 
+def full_report():
+    result = formal_report(fixtures(), public_ledger())
+    result["history"] = {k:v for k,v in history()[1].items() if k != "rows"}
+    return result
+
+
+def season_fixtures(season):
+    now, matches, ledger = datetime.now(UTC), fixtures(), public_ledger()
+    chosen = [m for m in matches if m["season"]==season]
+    if not chosen:
+        raise KeyError(season)
+    games = _present(chosen,matches,ledger,now)
+    ids = {m["id"] for m in chosen}
+    report = formal_report(matches,ledger,now) if any(r["id"] in ids and r.get("payload") for r in ledger["records"]) else {}
+    _attach_trace(games,matches,ledger,report,now)
+    return games
+
+
 def prediction(match_id):
     matches = fixtures()
     m = next((r for r in matches if r["id"] == match_id),None)
@@ -302,7 +432,8 @@ def prediction(match_id):
         raise KeyError(match_id)
     now,ledger = datetime.now(UTC),public_ledger()
     games = _present([m], matches, ledger, now)
-    _attach_trace(games,matches,ledger,formal_report(matches,ledger,now),now)
+    report = formal_report(matches,ledger,now) if any(r["id"]==match_id and r.get("payload") for r in ledger["records"]) else {}
+    _attach_trace(games,matches,ledger,report,now)
     return games[0]
 
 
@@ -316,7 +447,7 @@ def ask(question, fixture_id=None, zone="Europe/London"):
         return reply("目前缺少可核实的实时伤停和首发数据。模型使用赛前已知的历史赛果。")
     matches = fixtures()
     trace_question = any(word in q for word in ("这场得","这场评分","这场的评分","这场的成绩","结算","见证","时间线","这场比赛得","单场评分"))
-    if not trace_question and any(x in q for x in ("过去","上赛季","成绩","表现比","领先市场","赛季模型","战绩","beat the market")):
+    if not trace_question and any(x in q for x in ("过去","上赛季","成绩","表现比","领先市场","赛季模型","战绩","评测","试运行","历史回放","beat the market")):
         report = formal_report(matches,public_ledger())
         requested = re.search(r"20\d\d-\d\d",q)
         season = requested.group() if requested else None
@@ -324,10 +455,18 @@ def ask(question, fixture_id=None, zone="Europe/London"):
             season = max((s for s in {m["season"] for m in matches} if sum(
                 m["season"]==s and m["hg"] is not None for m in matches)==380),default=None)
         if season:
-            summary = next((s for s in report["seasons"] if s["season"]==season),None)
+            if "历史" in q or "回放" in q:
+                row = next((s for s in history()[1]["seasons"] if s["season"]==season),None)
+                if row:
+                    return reply(f"{season} 历史回放有 {row['n']} 场，模型 A 平均对数损失 {row['log_loss']:.4f}，Brier 分数 {row['brier']:.4f}。")
+                return reply(f"{season} 赛季尚无历史回放评分。")
+            official = next((s for s in report["seasons"] if s["season"]==season),None)
+            pilot = next((s for s in report.get("pilot",{}).get("seasons",[]) if s["season"]==season),None)
+            summary = official if "正式" in q else pilot if "试运行" in q else official or pilot
             if not summary or not summary["paired"]:
-                return reply(f"{season} 赛季尚无可核验的同场市场配对，无法判断该季是否领先。")
-            return reply(f"{season} 赛季有 {summary['paired']} 场有效配对，融合模型和市场平均对数损失分别为 "
+                label = "正式评测" if "正式" in q else "试运行" if "试运行" in q else ""
+                return reply(f"{season} 赛季{label}尚无可核验的同场市场配对，无法判断该季是否领先。")
+            return reply(f"{season} 赛季{'正式评测' if summary is official else '试运行'}有 {summary['paired']} 场有效配对，融合模型和市场平均对数损失分别为 "
                          f"{summary['model_loss']:.4f}、{summary['market_loss']:.4f}。")
         status = {"accumulating":"正在积累样本","leading":"在预注册赛季和时点领先","unproven":"尚未证实领先"}
         return reply(f"正式评测有 {report['n_pairs']} 场可核验配对，目前{status[report['status']]}。")
@@ -342,32 +481,36 @@ def ask(question, fixture_id=None, zone="Europe/London"):
             tz = ZoneInfo(zone)
         except (ZoneInfoNotFoundError,ValueError,TypeError):
             tz = ZoneInfo("Europe/London")
-        today = datetime.now(tz).date()
+        clock = datetime.now(tz)
+        today = clock.date()
         sat = today+timedelta(days=(5-today.weekday())%7 if today.weekday()!=6 else -1)
         weekend = "周末" in q or "weekend" in q
         candidates = []
         for m in matches:
             md = instant(m["kickoff_utc"]).astimezone(tz).date() if m["kickoff_utc"] else date.fromisoformat(m["date"])
-            if m["hg"] is None and (sat<=md<=sat+timedelta(days=1) if weekend else md>=today):
+            upcoming = instant(m["kickoff_utc"])>clock if m["kickoff_utc"] else md>=today
+            if m["hg"] is None and (sat<=md<=sat+timedelta(days=1) if weekend else upcoming):
                 candidates.append(m)
     else:
         candidates = matches
     if teams:
         candidates = [m for m in candidates if teams <= {m["home"],m["away"]}]
-    selected = next((m for m in candidates if m["id"]==fixture_id),None)
+    next_game = "下一场" in q or "下场" in q
+    selected = None if next_game else next((m for m in candidates if m["id"]==fixture_id),None)
     if not selected:
-        if len(candidates)==1 or (candidates and ("下一场" in q or "下场" in q)):
-            selected = min(candidates,key=lambda r:r["date"])
+        if len(candidates)==1 or (candidates and next_game):
+            selected = min(candidates,key=lambda r:(r["date"],r.get("kickoff_utc") or "",r["id"]))
         else:
             ranked = sorted(candidates,key=lambda m:abs((date.fromisoformat(m["date"])-date.today()).days))
             return reply("请选择具体场次。" if ranked else "已收录的赛程中没有找到符合条件的比赛。",
                          [{"id":m["id"],"label":f"{m['date']} · {m['home']} – {m['away']}"} for m in ranked[:8]])
+    if next_game or any(s in q for s in ("踢谁","对手","何时","时间","赛程","weekend")) and not trace_question:
+        home,away = (data.DISPLAY_ZH.get(selected[k],selected[k]) for k in ("home","away"))
+        return reply(f"{selected['date']} {home} 对 {away}。开球时间（UTC）：{selected['kickoff_utc'] or '待核实'}。")
     game = prediction(selected["id"])
     name = f"{game['date']} {game['home_zh']} 对 {game['away_zh']}"
     if trace_question:
         return reply(game["trace_answer"])
-    if any(s in q for s in ("踢谁","对手","何时","时间","赛程","weekend")):
-        return reply(f"{name}。开球时间（UTC）：{game['kickoff_utc'] or '待核实'}。")
     p = game["prediction"]
     market_question = any(s in q for s in ("市场","分歧","赔率","market"))
     if not p:

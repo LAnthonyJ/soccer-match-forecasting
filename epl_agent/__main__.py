@@ -30,10 +30,18 @@ def export_site(directory, snapshot_dir=None):
     index.write_text(index.read_text("utf8").replace('name="data-mode" content="server"',
                                         'name="data-mode" content="static"'),encoding="utf8")
     dashboard = service.dashboard(static=True,snapshot=verified)
+    if verified is not None:
+        from re import fullmatch
+        sha = os.getenv("SNAPSHOT_SHA","")
+        repo = os.getenv("EPL_EVIDENCE_REPO","")
+        if fullmatch(r"[0-9a-f]{40}",sha) and fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+",repo):
+            dashboard["fixed_snapshot_url"] = f"https://raw.githubusercontent.com/{repo}/{sha}/snapshot.json"
     (directory/"status.json").write_text(canonical(dashboard["operations"]),encoding="utf8")
     (directory/"dashboard.json").write_text(canonical(dashboard),encoding="utf8")
     (directory/"ledger.json").write_text(canonical(verified["ledger"] if verified is not None else public_ledger()),encoding="utf8")
     service.export_history_assets(directory,dashboard,snapshot=verified)
+    from .analysis import export_assets
+    export_assets(directory,dashboard)
     if verified is not None:
         (directory/snapshot.NAME).write_bytes(snapshot_bytes)
         (directory/"openligadb.json").write_text(canonical(verified["overlay"]),encoding="utf8")
@@ -50,6 +58,11 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command",required=True)
     demo = commands.add_parser("demo"); demo.add_argument("--port",type=int,default=5051)
     sync = commands.add_parser("sync"); sync.add_argument("--season")
+    schedules = commands.add_parser("schedule").add_subparsers(dest="action",required=True)
+    reconcile = schedules.add_parser("reconcile",help="Apply reviewed kickoffs to local provider records")
+    reconcile.add_argument("--season",required=True)
+    inspect = schedules.add_parser("candidates",help="Inspect sources and the decision fingerprint")
+    inspect.add_argument("fixture_id")
     train = commands.add_parser("train"); train.add_argument("--output",type=Path)
     predict = commands.add_parser("predict"); predict.add_argument("match_id")
     bt = commands.add_parser("backtest"); bt.add_argument("--formal",action="store_true")
@@ -60,6 +73,7 @@ def main(argv=None):
     worker.add_argument("--publish-snapshot",action="store_true",help="Publish public-data independently of the collection loop")
     worker.add_argument("--once",action="store_true",help="Run one collection and reconciliation pass")
     commands.add_parser("status")
+    commands.add_parser("upload-times")
     match_cmd = commands.add_parser("match").add_subparsers(dest="action",required=True)
     trace = match_cmd.add_parser("trace")
     trace.add_argument("fixture_id")
@@ -87,6 +101,19 @@ def main(argv=None):
             create_app().run(host="127.0.0.1",port=args.port,debug=False,use_reloader=False)
         elif args.command=="sync":
             output(data.sync(root_dir()/"fixtures.sqlite3",season=args.season))
+        elif args.command=="schedule":
+            from . import schedule, source_sync
+            path = root_dir()/"fixtures.sqlite3"
+            if args.action == "reconcile":
+                output(source_sync.reconcile_schedule(path,args.season))
+            else:
+                match = next((r for r in data.load_matches(path) if r["id"] == args.fixture_id),None)
+                if match is None:
+                    raise ValueError("Unknown fixture ID")
+                refs = match.get("source_observations",{})
+                output({"id":match["id"], "fingerprint":schedule.fingerprint(match["id"],refs),
+                        "candidates":refs, "status":match.get("schedule_status","unconfirmed"),
+                        "review":match.get("schedule_review")})
         elif args.command=="train":
             target = args.output or root_dir()/"models"
             target.mkdir(parents=True,exist_ok=True)
@@ -146,6 +173,8 @@ def main(argv=None):
             output(summary)
             if not summary["ok"]:
                 return 1
+        elif args.command=="upload-times":
+            output(operations.upload_times())
         elif args.command=="status":
             output(operations.local_status())
         elif args.command=="match":

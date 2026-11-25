@@ -12,6 +12,8 @@ Explore English Premier League match predictions one day before kickoff. The Chi
 
 ## Run locally
 
+Open a fixture and select the analysis panel to review the match outlook, recent form, market comparison and source facts. The offline demo labels program-generated summaries. Verified DeepSeek reports display the provider and generation time. GitHub Pages can mirror public reports; interactive follow-ups use the same-origin gateway. [Analysis and deployment](docs/ANALYSIS.md)
+
 From a clone or source archive, using Python 3.11–3.13:
 
 ```sh

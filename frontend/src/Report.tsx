@@ -65,7 +65,7 @@ function MarketReport({r}:{r:Scores}) {
   </>
 }
 
-function PilotReceipt({r,openMatch,publicSnapshot}:{r:Scores;openMatch:OpenMatch;publicSnapshot:boolean}) {
+function PilotReceipt({r,openMatch,publicSnapshot,fixedSnapshot}:{r:Scores;openMatch:OpenMatch;publicSnapshot:boolean;fixedSnapshot?:string}) {
   const paired = [...(r.pilot?.rows||[])].filter(row=>row.status==='paired' && row.evidence && row.a && row.b && row.market
     && (outcomes.includes(row.actual as Outcome)||[0,1,2].includes(Number.isInteger(row.actual)?Number(row.actual):-1)))
     .sort((a,b)=>(a.kickoff||'').localeCompare(b.kickoff||'')||a.id.localeCompare(b.id))[0]
@@ -80,7 +80,7 @@ function PilotReceipt({r,openMatch,publicSnapshot}:{r:Scores;openMatch:OpenMatch
           return <tr key={k}><th>{{a:'独立模型 A',market:'市场基准',b:'融合模型 B'}[k]}</th><td>{pct(probs[index])}</td>
             <td>{num(-Math.log(Math.max(probs[index],1e-15)),4)}</td><td>{num(probs.reduce((sum,v,i)=>sum+(v-Number(i===index))**2,0),4)}</td></tr>})}</tbody></table></div>
       </>:<p className="muted">待验收。首场比赛完成赛前公开见证、赛果结算和独立核验后，这里将显示见证与单场评分。</p>}
-    {publicSnapshot&&<div className="rp-files" aria-label="复算数据下载"><a download href="./snapshot.json">预测快照 JSON ↓</a>
+    {publicSnapshot&&<div className="rp-files" aria-label="复算数据下载"><a download href={fixedSnapshot||'./snapshot.json'}>{fixedSnapshot?'本批次固定预测快照 JSON':'预测快照 JSON'} ↓</a>
       <a download href="./merged-seasons.json">合并赛季数据 · ODbL ↓</a><a download href="./openligadb.json">OpenLigaDB 数据 ↓</a></div>}
     <a className="ledger" href="https://github.com/LAnthonyJ/worldcup_prediction/blob/epl-v1/docs/EVALUATION.md" target="_blank" rel="noopener">复算步骤与评测协议 ↗</a>
   </section>
@@ -165,30 +165,42 @@ function downloadRows(rows:Row[], cohort:Cohort, season:string) {
   a.href=url; a.download='epl-'+cohort+'-'+(season||'all-seasons')+'.csv'; document.body.append(a); a.click(); a.remove()
   window.setTimeout(()=>URL.revokeObjectURL(url),1000)
 }
-function MatchRecords({r,openMatch}:{r:Scores;openMatch:OpenMatch}) {
+async function fetchHistory(season:string,page:number|null,partitioned:boolean,signal?:AbortSignal):Promise<Row[]> {
+  const params=new URLSearchParams()
+  if(season&&partitioned)params.set('season',season)
+  if(page!==null&&partitioned)params.set('page',String(page+1))
+  const year=encodeURIComponent(season||'all')
+  const url=isStatic()?(partitioned&&page!==null?'./history/'+year+'/'+(page+1)+'.json':
+    season&&partitioned?'./history/'+year+'.json':'./history-rows.json'):'/api/history-rows?'+params
+  const response=await fetch(url,{signal})
+  if(!response.ok)throw new Error('Rows unavailable')
+  const rows:unknown=await response.json()
+  if(!Array.isArray(rows))throw new Error('Unexpected response')
+  return (rows as HistoryRow[]).map(historyRow)
+}
+
+function MatchRecords({r,openMatch,partitioned}:{r:Scores;openMatch:OpenMatch;partitioned:boolean}) {
   const [cohort,setCohort]=useState<Cohort>('history'), [season,setSeason]=useState(''), [reason,setReason]=useState('')
   const [sort,setSort]=useState('date'), [page,setPage]=useState(0), [retry,setRetry]=useState(0)
-  const [history,setHistory]=useState<Row[]|null>(null), [error,setError]=useState(false)
+  const paged=partitioned&&cohort==='history'&&sort==='date'&&!reason
+  const pageKey=paged?page:null
+  const [history,setHistory]=useState<{key:string;rows:Row[]}|null>(null), [error,setError]=useState(false)
+  const [downloading,setDownloading]=useState(false),[downloadError,setDownloadError]=useState(false)
+  const queryKey=JSON.stringify([season,pageKey])
   useEffect(()=>{
-    if(cohort!=='history'||history!==null)return
+    if(cohort!=='history')return
     const controller=new AbortController()
     setError(false)
-    async function load(){
-      const response=await fetch(isStatic()?'./history-rows.json':'/api/history-rows',{signal:controller.signal})
-      if(!response.ok) throw new Error('Rows unavailable')
-      const data:unknown=await response.json()
-      if(!Array.isArray(data)) throw new Error('Unexpected response')
-      if(!controller.signal.aborted) setHistory((data as HistoryRow[]).map(historyRow))
-    }
-    load().catch(()=>{if(!controller.signal.aborted)setError(true)})
+    fetchHistory(season,pageKey,partitioned,controller.signal).then(rows=>{if(!controller.signal.aborted)setHistory({key:queryKey,rows})})
+      .catch(()=>{if(!controller.signal.aborted)setError(true)})
     return ()=>controller.abort()
-  },[cohort,history,retry])
-  const pending=cohort==='history'&&history===null&&!error
-  const rows=useMemo(()=>cohort==='history'?history||[]:(cohort==='independent'?
-    [...(r.pilot?.independent?.rows||[]),...(r.independent?.rows||[])]:((cohort==='pilot'?r.pilot?.rows:r.rows)||[])).map(marketRow),[cohort,history,r])
-  const seasons=useMemo(()=>Array.from(new Set(rows.map(m=>m.season))).sort().reverse(),[rows])
+  },[cohort,queryKey,pageKey,season,partitioned,retry])
+  const pending=cohort==='history'&&history?.key!==queryKey&&!error
+  const rows=useMemo(()=>cohort==='history'?(history?.key===queryKey?history.rows:[]):(cohort==='independent'?
+    [...(r.pilot?.independent?.rows||[]),...(r.independent?.rows||[])]:((cohort==='pilot'?r.pilot?.rows:r.rows)||[])).map(marketRow),[cohort,history,r,queryKey])
+  const seasons=useMemo(()=>Array.from(new Set(cohort==='history'?r.history.seasons.map(s=>s.season):rows.map(m=>m.season))).sort().reverse(),[rows,cohort,r])
   const seasonRows=useMemo(()=>rows.filter(m=>!season||m.season===season),[rows,season])
-  const codes=useMemo(()=>Array.from(new Set(seasonRows.map(m=>m.reason))).sort(),[seasonRows])
+  const codes=useMemo(()=>paged?['complete','missing_component']:Array.from(new Set([...seasonRows.map(m=>m.reason),...(reason?[reason]:[])])).sort(),[seasonRows,paged,reason])
   const component=cohort==='history'||cohort==='independent'?'a':'b'
   const filtered=useMemo(()=>{
     let list=seasonRows.filter(m=>!reason||reason===m.reason)
@@ -202,9 +214,18 @@ function MatchRecords({r,openMatch}:{r:Scores;openMatch:OpenMatch}) {
     return list
   },[seasonRows,reason,sort,component])
   const pageSize=20
-  const lastPage=Math.max(0,Math.ceil(filtered.length/pageSize)-1), current=Math.min(page,lastPage)
+  const total=paged?(season?r.history.seasons.find(s=>s.season===season)?.n||0:r.history.n):filtered.length
+  const lastPage=Math.max(0,Math.ceil(total/pageSize)-1), current=Math.min(page,lastPage)
+  async function download(){
+    setDownloading(true);setDownloadError(false)
+    try{
+      const all=paged?(await fetchHistory(season,null,partitioned)).sort((a,b)=>b.date.localeCompare(a.date)||a.id.localeCompare(b.id)):filtered
+      downloadRows(all,cohort,season)
+    }catch{setDownloadError(true)}finally{setDownloading(false)}
+  }
   return <section className="panel"><header className="section-head"><h3>逐场记录</h3>
-    <button className="rp-download" disabled={!filtered.length} onClick={()=>downloadRows(filtered,cohort,season)}>下载当前筛选 CSV ↓</button></header>
+    <button className="rp-download" disabled={downloading||!filtered.length} onClick={()=>void download()}>{downloading?'正在准备 CSV…':'下载当前筛选 CSV ↓'}</button></header>
+    {downloadError&&<p role="alert">下载失败，请重试。</p>}
     <div className="rp-toolbar">
       <label>记录来源<select value={cohort} onChange={e=>{setCohort(e.target.value as Cohort);setSeason('');setReason('');setSort('date');setPage(0)}}>{(Object.keys(cohortNames) as Cohort[]).map(k=><option key={k} value={k}>{cohortNames[k]}</option>)}</select></label>
       <label>记录赛季<select value={season} onChange={e=>{setSeason(e.target.value);setReason('');setPage(0)}}><option value="">全部赛季</option>{seasons.map(s=><option key={s}>{s}</option>)}</select></label>
@@ -213,10 +234,10 @@ function MatchRecords({r,openMatch}:{r:Scores;openMatch:OpenMatch}) {
     </div>
     {pending?<p className="muted" role="status">正在读取历史逐场概率…</p>:cohort==='history'&&error?
       <p className="muted" role="alert">历史明细加载失败。 <button className="plain" onClick={()=>setRetry(n=>n+1)}>重试</button></p>:<>
-      <p className="rp-summary" role="status">{filtered.length.toLocaleString()} 场{sort==='worst'?' · 按模型给真实赛果的概率从低到高排列':sort==='gap'?' · 按模型 B 与市场的最大绝对概率差排列':''}</p>
+      <p className="rp-summary" role="status">{total.toLocaleString()} 场{sort==='worst'?' · 按模型给真实赛果的概率从低到高排列':sort==='gap'?' · 按模型 B 与市场的最大绝对概率差排列':''}</p>
       {filtered.length>0?<><div className="table-wrap" tabIndex={0} aria-label="逐场预测列表"><table className="rp-record-table"><thead><tr>
         <th>比赛日期</th><th>对阵</th><th>实际赛果</th><th>{component.toUpperCase()} 对赛果的概率</th>{component==='b'&&<th>市场对赛果的概率</th>}<th>状态</th></tr></thead>
-        <tbody>{filtered.slice(current*pageSize,(current+1)*pageSize).map((m,i)=><tr key={m.id+'-'+i}>
+        <tbody>{(paged?filtered:filtered.slice(current*pageSize,(current+1)*pageSize)).map((m,i)=><tr key={m.id+'-'+i}>
           <td>{m.date?fmtTime(m.date,true):'待核实'}</td><th><button className="rp-match" onClick={()=>openMatch(m.id,m.season)}>{m.home} <span>vs</span> {m.away}</button></th>
           <td>{m.actual?sides[m.actual]:'—'}</td><td>{pct(actualProbability(m,component))}</td>
           {component==='b'&&<td>{pct(m.actual?m.probs.market?.[outcomes.indexOf(m.actual)]:null)}</td>}
@@ -229,7 +250,7 @@ function MatchRecords({r,openMatch}:{r:Scores;openMatch:OpenMatch}) {
   </section>
 }
 
-export function Report({r,openMatch,publicSnapshot=false}:{r:Scores;openMatch:OpenMatch;publicSnapshot?:boolean}) {
-  return <div className="report"><MarketReport r={r}/><PilotReceipt r={r} openMatch={openMatch} publicSnapshot={publicSnapshot}/>
-    <HistorySummary r={r}/><MatchRecords r={r} openMatch={openMatch}/></div>
+export function Report({r,openMatch,publicSnapshot=false,partitioned=false,fixedSnapshot}:{r:Scores;openMatch:OpenMatch;publicSnapshot?:boolean;partitioned?:boolean;fixedSnapshot?:string}) {
+  return <div className="report"><MarketReport r={r}/><PilotReceipt r={r} openMatch={openMatch} publicSnapshot={publicSnapshot} fixedSnapshot={fixedSnapshot}/>
+    <HistorySummary r={r}/><MatchRecords r={r} openMatch={openMatch} partitioned={partitioned}/></div>
 }

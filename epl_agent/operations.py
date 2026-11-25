@@ -33,6 +33,7 @@ def store(root=None, *, write=False):
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS progress(name TEXT PRIMARY KEY, value TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS uploaded(sha TEXT PRIMARY KEY, items TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS upload_times(sha TEXT PRIMARY KEY, uploaded_at TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS deployments(
                     id TEXT, kickoff TEXT, revision INTEGER, hash TEXT, result_observed_at TEXT,
                     seen_at TEXT, sha TEXT, PRIMARY KEY(id,kickoff,revision,hash,result_observed_at));
@@ -77,9 +78,24 @@ def record_upload(root, sha, batch):
             continue
         entries.append([row["id"],row["kickoff"],row["revision"],row["hash"],fixture.get("result_observed_at") or ""])
     with store(root, write=True) as db:
+        received = stamp()
+        db.execute("""INSERT OR IGNORE INTO upload_times SELECT ?,?
+                      WHERE NOT EXISTS(SELECT 1 FROM uploaded WHERE sha=?)""",(sha,received,sha))
         db.execute("INSERT OR REPLACE INTO uploaded VALUES (?,?)", (sha,json.dumps(entries)))
-        for key,value in {"upload_sha":sha,"upload_at":stamp(),"publication_status":"pending_deployment"}.items():
+        for key,value in {"upload_sha":sha,"upload_at":received,"publication_status":"pending_deployment"}.items():
             db.execute("INSERT OR REPLACE INTO progress VALUES(?,?)",(key,json.dumps(value)))
+
+
+def upload_times(root=None):
+    """First collector receipts observed after this schema was installed."""
+    through=stamp()
+    rows=[]
+    with store(root) as db:
+        if db and db.execute("SELECT 1 FROM sqlite_master WHERE name='upload_times'").fetchone():
+            rows=[{"sha":sha,"uploaded_at":at} for sha,at in db.execute(
+                "SELECT sha,uploaded_at FROM upload_times WHERE uploaded_at<=? ORDER BY uploaded_at,sha",(through,))]
+    return {"schema":"epl-upload-times/v1","from_utc":rows[0]["uploaded_at"] if rows else None,
+            "through_utc":through,"uploads":rows}
 
 
 def check_deployment(root, http=requests.get):
@@ -110,7 +126,9 @@ def check_deployment(root, http=requests.get):
 
 def status(matches, ledger, health, now, state, *, snapshot_at=None):
     cutoffs = sorted(instant(m["kickoff_utc"])-timedelta(days=1) for m in matches
-                     if m.get("kickoff_utc") and m.get("hg") is None and not m.get("withdrawn"))
+                     if m.get("kickoff_utc") and m.get("hg") is None and not m.get("withdrawn")
+                     and (m.get("schedule_status") == "verified" or
+                          (snapshot_at is not None and "schedule_status" not in m)))
     next_cutoff = next((dt for dt in cutoffs if dt >= now), None)
     pulse = state.get("heartbeat_at")
     return {**state, "worker_status": ("unknown" if not pulse else "offline"

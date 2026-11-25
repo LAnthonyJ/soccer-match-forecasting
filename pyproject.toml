@@ -21,4 +21,4 @@ epl-agent = "epl_agent.__main__:main"
 packages = ["epl_agent"]
 
 [tool.setuptools.package-data]
-epl_agent = ["assets/data/*", "assets/models/*", "static/*", "static/assets/*"]
+epl_agent = ["assets/data/*", "assets/models/*", "assets/schedule/*", "static/*", "static/assets/*"]

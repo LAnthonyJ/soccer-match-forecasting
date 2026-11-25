@@ -1,12 +1,15 @@
 """Paired prospective scoring, using only externally witnessed forecasts."""
 from collections import Counter, defaultdict
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 import json
 import math
+from pathlib import Path
+import sqlite3
 
 import numpy as np
 
-from .market import PROTOCOL, database, digest, instant, read_value
+from .market import PROTOCOL, digest, instant, read_value, root_dir
 from .evidence import comment_api
 
 
@@ -47,10 +50,21 @@ def interval(rows):
 
 
 def public_ledger(root=None):
-    with database(root) as db:
+    empty = dict.fromkeys(("registration","registration_evidence","public_audit","health"))
+    path = Path(root or root_dir()) / "market.sqlite3"
+    if not path.is_file():
+        return dict(empty,records=[])
+    with closing(sqlite3.connect(path.resolve().as_uri()+"?mode=ro",uri=True)) as db:
+        db.row_factory = sqlite3.Row
+        db.execute("BEGIN")
+        fields = {r[1] for r in db.execute("PRAGMA table_info(captures)")}
+        if not fields or not db.execute("SELECT 1 FROM sqlite_master WHERE name='state'").fetchone():
+            return dict(empty,records=[])
         reg = read_value(db,"registration")
         records = []
-        for row in db.execute("SELECT * FROM captures ORDER BY received,fixture"):
+        columns = ["fixture","kickoff","revision","received","reason","hash","payload","evidence","witnessed"]
+        columns.extend(k for k in ("freeze_reason","market_reason") if k in fields)
+        for row in db.execute("SELECT "+",".join(columns)+" FROM captures ORDER BY received,fixture"):
             p = json.loads(row["payload"]) if row["payload"] else None
             reasons = {k: row[k] for k in ("freeze_reason","market_reason") if k in row.keys() and row[k] is not None}
             records.append({"id":row["fixture"],"kickoff":row["kickoff"],"revision":row["revision"],"observed":row["received"],
@@ -115,6 +129,13 @@ def _valid_capture(m, row, reg, witness, now, *, legacy_pair_window=False):
                 and all(abs(.8*market+.2*a-b) <= 1e-9 for a,market,b in zip(p["a"],p["market"],p["b"])))
     except (KeyError,TypeError,ValueError,OverflowError):
         return False
+
+
+def _schedule_receipt_matches(match, row, ledger):
+    if not ledger.get("require_schedule_proof", match.get("schedule_status") == "verified"):
+        return True
+    return (match.get("schedule_status") == "verified" and bool(match.get("schedule_observed_at"))
+            and row["payload"].get("schedule_observed_at") == match["schedule_observed_at"])
 
 
 def _independent_reason(match, row, reg, witness, audit, cutoff, now):
@@ -192,6 +213,9 @@ def _independent_report(fixtures, ledger, now, years, *, pilot):
                     and (not kickoff or kickoff <= now) and (not result_seen or result_seen <= now))
         if finished:
             row["actual"] = "H" if m["hg"] > m["ag"] else "A" if m["hg"] < m["ag"] else "D"
+        if m.get("schedule_status") in ("conflict","unconfirmed"):
+            row["reason"] = "schedule_" + m["schedule_status"]
+            continue
         if not cutoff:
             row["reason"] = "kickoff_unverified"
             continue
@@ -214,6 +238,9 @@ def _independent_report(fixtures, ledger, now, years, *, pilot):
                 row["reason"] = "no_matching_snapshot"
             continue
         entry = candidates[0]
+        if not _schedule_receipt_matches(m,entry,ledger):
+            row["reason"] = "schedule_unverified"
+            continue
         reason = _independent_reason(m,entry,reg,witness,audit,cutoff,now)
         if reason:
             row["reason"] = reason
@@ -283,7 +310,10 @@ def _cohort_report(fixtures, ledger, now, years, *, official):
         if m.get("source_conflict"):
             exclude("source_conflict")
             continue
+        timing_pending = m.get("schedule_status") in ("conflict","unconfirmed")
         if m["hg"] is None or m["ag"] is None:
+            if timing_pending:
+                exclude("schedule_" + m["schedule_status"])
             continue
         if fixture_counts[m["id"]]!=1:
             exclude("duplicate_fixture")
@@ -293,6 +323,9 @@ def _cohort_report(fixtures, ledger, now, years, *, official):
         finished[season] += 1
         y = 0 if m["hg"]>m["ag"] else 2 if m["hg"]<m["ag"] else 1
         detail["actual"] = "HDA"[y]
+        if timing_pending:
+            exclude("schedule_" + m["schedule_status"])
+            continue
         key = (m["id"],m["kickoff_utc"],m.get("schedule_revision",0))
         row = records.get(key)
         if record_counts[key] > 1:
@@ -305,6 +338,9 @@ def _cohort_report(fixtures, ledger, now, years, *, official):
         p = row["payload"]
         if not p.get("market") or not p.get("b"):
             exclude(row["reason"])
+            continue
+        if not _schedule_receipt_matches(m,row,ledger):
+            exclude("schedule_unverified")
             continue
         if not reg_ok or not _valid_capture(m,row,reg,witness,now,legacy_pair_window=ledger.get("legacy_pair_window",False)):
             exclude("unverified_forecast")

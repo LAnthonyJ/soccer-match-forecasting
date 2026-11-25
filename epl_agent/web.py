@@ -6,12 +6,22 @@ from .evaluation import public_ledger
 
 def create_app():
     app = Flask(__name__, static_folder=None)
+    from .analysis_web import bp
+    app.register_blueprint(bp)
     app.config["MAX_CONTENT_LENGTH"] = 8192
     app.json.ensure_ascii = False
 
     @app.get("/")
     def index():
         return send_from_directory(service.STATIC, "index.html")
+
+    @app.get("/about.html")
+    def about():
+        return send_from_directory(service.STATIC,"about.html")
+
+    @app.get("/analysis-evidence.html")
+    def analysis_evidence():
+        return send_from_directory(service.STATIC,"analysis-evidence.html")
 
     @app.get("/assets/<path:name>")
     def assets(name):
@@ -28,6 +38,21 @@ def create_app():
         except ValueError as exc:
             return jsonify(error=str(exc)),400
 
+    @app.get("/api/board")
+    def board():
+        return jsonify(service.dashboard(compact=True))
+
+    @app.get("/api/report")
+    def report():
+        return jsonify(service.full_report())
+
+    @app.get("/api/seasons/<season>")
+    def season(season):
+        try:
+            return jsonify(service.season_fixtures(season))
+        except KeyError:
+            abort(404)
+
     @app.get("/api/fixtures/<fixture_id>")
     def fixture(fixture_id):
         try:
@@ -41,7 +66,17 @@ def create_app():
 
     @app.get("/api/history-rows")
     def history_rows():
-        return jsonify(service.historical_rows())
+        rows = service.historical_rows()
+        year = request.args.get("season")
+        if year:
+            rows = [r for r in rows if r["season"]==year]
+        if "page" in request.args:
+            from itertools import islice
+            page = request.args.get("page",type=int)
+            if page is None or page<1:
+                abort(400)
+            return jsonify(next(islice(service.history_pages(rows),page-1,page),[]))
+        return jsonify(rows)
 
     @app.post("/api/ask")
     def ask():

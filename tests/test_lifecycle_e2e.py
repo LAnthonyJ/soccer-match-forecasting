@@ -61,8 +61,10 @@ class LifecycleTest(unittest.TestCase):
         issue.post.side_effect = post
 
         def sync_scores():
-            with patch.object(source_sync,"datetime",Clock), patch.object(data,"_primary",return_value=(schedule,"a"*40)):
-                result = source_sync.synchronize(fixtures_path,season,(source_sync.PRIMARY,))
+            corroboration = [dict(m,fixture_id=str(i)) for i,m in enumerate(schedule)]
+            with (patch.object(source_sync,"datetime",Clock), patch.object(data,"_primary",return_value=(schedule,"a"*40)),
+                  patch.object(source_sync,"_secondary",return_value=(corroboration,"b"*64))):
+                result = source_sync.synchronize(fixtures_path,season)
             self.assertEqual(result["status"],"ok")
 
         sync_scores()

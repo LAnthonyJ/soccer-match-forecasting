@@ -3,6 +3,10 @@ __pycache__/
 .venv/
 .env
 .env.*
+.dev.vars
+.dev.vars.*
+.wrangler/
+cloudflare/wrangler.toml
 *.sqlite*
 *.db
 *.pem

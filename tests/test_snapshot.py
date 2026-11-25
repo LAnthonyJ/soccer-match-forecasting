@@ -1,5 +1,7 @@
 import json
 import os
+import sqlite3
+from contextlib import closing
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -26,7 +28,7 @@ class SnapshotTests(unittest.TestCase):
         snapshot.export_bundle(self.dir/"out")
         path = self.dir/"out"/snapshot.NAME
         original = json.loads(path.read_bytes())
-        self.assertEqual(original["format"],"public-snapshot/v2")
+        self.assertEqual(original["format"],"public-snapshot/v3")
         self.assertIn("independent",original["scores"]["formal"])
         self.assertEqual(original["scores"]["formal"]["independent"]["n_scored"],0)
         with patch.dict(os.environ,{"EPL_AGENT_HOME":str(self.dir/"unused")}):
@@ -123,6 +125,12 @@ class SnapshotTests(unittest.TestCase):
         f=next(m for m in rows if m["kickoff_utc"] and m["hg"] is not None)
         cutoff=datetime.fromisoformat(f["kickoff_utc"])-timedelta(days=1)
         at=(cutoff-timedelta(minutes=1)).isoformat()
+        # A v3 fixture carries the time that this pair of open-data observations became usable.
+        index = rows.index(f)
+        f = dict(f,observed_at=at,schedule_observed_at=at,schedule_status="verified",schedule_source="openfootball",
+                 source_observations={provider:{"kickoff_utc":f["kickoff_utc"],"observed_at":at}
+                                      for provider in ("openfootball","openligadb")})
+        rows[index] = f
         a=[.6,.25,.15]; market=[.5,.3,.2]
         p=dict(id=f["id"],season=f["season"],kickoff=f["kickoff_utc"],cutoff=cutoff.isoformat(),observed=at,
                frozen=at,model_version="A",protocol_hash=digest(registration),schedule_observed_at=at,
@@ -139,7 +147,7 @@ class SnapshotTests(unittest.TestCase):
                       health=None,records=[entry])
         as_of=datetime(2026,7,1,tzinfo=timezone.utc)
         years={s:data.season_health(None,s,rows,as_of) for s in registration["seasons"]}
-        batch=dict(as_of=as_of.isoformat(),fixtures=rows,versions=[],ledger=ledger,seasons_health=years,
+        batch=dict(as_of=as_of.isoformat(),fixtures=rows,versions=[f],ledger=ledger,seasons_health=years,
                    overlay=data.openligadb_overlay(None))
         http=Mock()
         def get(url,**kw):
@@ -164,7 +172,8 @@ class SnapshotTests(unittest.TestCase):
         early_http = Mock()
         early_http.get.side_effect = lambda url,**kw:Mock(status_code=200,json=lambda:
             [c1,early_comment] if url.endswith("/comments") else {"private":False})
-        legacy,legacy_scores = snapshot._check(early_batch,issue,early_http,version=snapshot.LEGACY_FORMAT)
+        legacy_batch = dict(early_batch,seasons_health={s:data.season_health(None,s,now=as_of) for s in registration["seasons"]})
+        legacy,legacy_scores = snapshot._check(legacy_batch,issue,early_http,version=snapshot.LEGACY_FORMAT)
         current,current_scores = snapshot._check(early_batch,issue,early_http)
         self.assertEqual(legacy_scores["formal"]["n_pairs"],1)
         self.assertEqual(current_scores["formal"]["n_pairs"],0)
@@ -191,6 +200,9 @@ class SnapshotTests(unittest.TestCase):
             db.execute("""INSERT INTO captures (fixture,kickoff,revision,received,reason,hash,payload,evidence,witnessed)
                           VALUES(?,?,?,?,?,?,?,?,?)""",
                        (f["id"],entry["kickoff"],0,at,"paired",entry["hash"],canonical(p),entry["evidence"],at))
+        with closing(sqlite3.connect(self.dir/"db"/"fixtures.sqlite3")) as fixtures_db, fixtures_db:
+            data._prepare_versions(fixtures_db)
+            fixtures_db.execute("INSERT INTO fixture_versions VALUES(?,?,?)",(f["id"],at,canonical(f)))
         with patch.dict(os.environ,{"EPL_EVIDENCE_REPO":"example/epl","EPL_EVIDENCE_ISSUE":"1"}):
             exported=snapshot.export_bundle(self.dir/"audited",session=http)
             local_ledger=public_ledger()

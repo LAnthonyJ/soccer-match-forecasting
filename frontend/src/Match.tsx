@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { AnalysisPanel } from './Analysis'
 import { type Fixture, type Prediction, type Triple, fixtureStatus, nameOf, fmtTime, num, pct, sides, difference, reasons } from './data'
 
 const clubColours: [RegExp,string,string][] = [
@@ -39,6 +40,7 @@ export function Match({f,openAsk}:{f:Fixture;openAsk:(q:string)=>void}) {
       </h2>
       <div className="kickoff">{f.kickoff_utc?fmtTime(f.kickoff_utc)+' 开球':fmtTime(f.date,true)+' · 开球时刻待确认'}</div>
     </div>
+    <AnalysisPanel key={f.id} f={f}/>
     {p ? <>
       <section className="panel chart-panel"><header className="section-head"><h3>胜平负预测</h3><span>常规时间含补时</span></header>
         <div className="outcomes">{p.a.map((v,i)=><div key={i}><div className={'outcome-label tone-'+i}><i/>{sides[i]}</div><b>{(100*v).toFixed(1)}<small>%</small></b></div>)}</div>
