@@ -84,8 +84,9 @@ def followup():
     result = analysis.template_report(bundle,"provider_unavailable")
     if re.search("伤|停赛|首发|阵容|injur|lineup",question,re.I):
         result["answer"] = next(f["text"] for f in bundle["facts"] if f["id"]=="injuries")
-    elif re.search("赛程|踢谁|下一场|下场|周末|评分|战绩|成绩|结算|赛季|市场|赔率|预计|概率|主胜|客胜|平局|看好|进球",question):
-        result.update(service.ask(question,fid,zone))
+    elif re.search(r"截止|采集窗口|冻结窗口|t\s*[-−－]?\s*24|赛程|踢谁|下一场|下场|周末|评分|战绩|成绩|结算|赛季|市场|赔率|预计|概率|主胜|客胜|平局|看好|进球",question,re.I):
+        lookup = service.ask(question,fid,zone)
+        result.update(answer=lookup["answer"],choices=lookup["choices"])
     else:
         result["answer"] = "基础数据解读支持查询胜平负、球队近况、赛程与市场比较。当前实时 AI 追问尚未连接。"
     return jsonify(result)

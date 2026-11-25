@@ -5,6 +5,7 @@ import sys
 from tempfile import TemporaryDirectory
 import time
 import unittest
+from unittest.mock import patch
 from uuid import uuid4
 
 from epl_agent.worker import single_worker
@@ -50,6 +51,20 @@ with (root / 'worker.lock').open('w+b') as lock:
 class WorkerStopTests(unittest.TestCase):
     def setUp(self):
         self.sandbox = Path(self.enterContext(TemporaryDirectory()))
+
+    def test_scheduled_worker_keeps_collecting_without_github_credentials(self):
+        from scripts import collector_runtime
+        from epl_agent import operations
+        argv = ["collector", "run", "--root", str(self.sandbox), "--git-credential"]
+        env = {"EPL_EVIDENCE_REPO":"example/football", "EPL_EVIDENCE_ISSUE":"1"}
+        with patch.dict(os.environ, env, clear=True), patch.object(sys, "argv", argv), \
+                patch.object(collector_runtime, "github_credentials", side_effect=ValueError("unavailable")), \
+                patch.object(collector_runtime.subprocess, "Popen") as spawn:
+            child = spawn.return_value.__enter__.return_value
+            child.wait.return_value = 0
+            self.assertEqual(collector_runtime.main(), 0)
+            self.assertEqual(spawn.call_args.args[0][-2:], ["epl_agent", "worker"])
+        self.assertEqual(operations.values(self.sandbox)["publication_status"], "credentials_missing")
 
     def start_holder(self, root, script):
         root.mkdir()

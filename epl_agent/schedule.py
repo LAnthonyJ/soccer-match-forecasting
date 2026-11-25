@@ -1,11 +1,12 @@
 """Bind a kickoff decision to the two open-data candidates for this exact fixture."""
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import lru_cache
 import hashlib
 import json
 from pathlib import Path
 
 from . import data
+from .market import PROTOCOL, instant
 
 PROVIDERS = ("openfootball", "openligadb")
 REVIEW_FILE = Path(__file__).with_name("assets") / "schedule" / "reviews.json"
@@ -55,3 +56,21 @@ def public_fixture(match, now):
             or match["date"] < now.astimezone(data.LONDON).date().isoformat()):
         return match
     return dict(match, kickoff_utc=None, schedule_status="unconfirmed", schedule_source=None)
+
+
+def confirmed_unplayed(match):
+    return (match.get("schedule_status") == "verified" and bool(match.get("kickoff_utc"))
+            and match.get("hg") is None and match.get("ag") is None
+            and not match.get("withdrawn") and not match.get("source_conflict"))
+
+
+def protocol_window_text(game):
+    if game.get("schedule_status") != "verified" or not game.get("kickoff_utc"):
+        return "开球时间尚未核实，正式冻结窗口待定。"
+    kickoff = instant(game["kickoff_utc"])
+    recorded = (game.get("trace") or {}).get("cutoff")
+    cutoff = instant(recorded) if recorded else kickoff - timedelta(hours=24)
+    opening = cutoff - timedelta(minutes=PROTOCOL["window_minutes"])
+    freezing = cutoff - timedelta(minutes=PROTOCOL["freeze_lead_minutes"])
+    return (f"开球 {kickoff.isoformat()}，T−24 截止 {cutoff.isoformat()}。"
+            f"采集从 {opening.isoformat()} 开始，计划冻结窗口为 {freezing.isoformat()} 至截止时间。以上均为 UTC。")

@@ -1,6 +1,7 @@
 """Prepare one verified build for the live gateway or its read-only report mirror."""
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -40,25 +41,45 @@ def fetch(url):
 
 def checked_report(report, packet):
     if (not isinstance(report,dict) or report.get("source")!="deepseek" or report.get("view","prematch")!="prematch"
-            or report.get("fact_hash")!=packet["fact_hash"] or report.get("fixture_id")!=packet["fixture_id"]):
+            or report.get("model")!="deepseek-flash" or report.get("fact_hash")!=packet["fact_hash"]
+            or report.get("fixture_id")!=packet["fixture_id"]):
+        return None
+    try:
+        generated = datetime.fromisoformat(report["generated_at"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if generated.tzinfo is None:
         return None
     facts={f["id"]:f for f in packet["facts"] if f["stage"]=="prematch"}
     titles={"fixture":"赛程与时点","prediction":"赛果判断","market":"市场比较","evaluation":"模型成绩"}
+    supplemental={"赛前判断":{"probabilities","favourite"}, "球队近况":{"home_form","away_form","expected_goals"},
+                  "市场对照":{"market","market_gap","blended_gap"}, "资料边界":{"injuries"}}
     clean=[]
     used=set()
-    for entry in report.get("sections",[]):
+    sections=report.get("sections")
+    if not isinstance(sections,list) or not 1 <= len(sections) <= 8:
+        return None
+    for entry in sections:
+        if not isinstance(entry,dict):
+            return None
         ids=entry.get("fact_ids",[])
-        if (not ids or any(k not in facts or k in used for k in ids)
+        if (not isinstance(ids,list) or not 1 <= len(ids) <= 5
+                or any(not isinstance(k,str) or k not in facts or k in used for k in ids)
                 or len(set(ids))!=len(ids)):
             return None
         selected=[facts[k] for k in ids]
         expected=" ".join(f["text"] for f in selected)
-        title=titles[selected[0]["tool"]]
-        if entry.get("text")!=expected or entry.get("title")!=title or any(f["tool"]!=selected[0]["tool"] for f in selected):
+        title=entry.get("title")
+        if not isinstance(title,str) or entry.get("text")!=expected:
+            return None
+        if title in supplemental:
+            if not set(ids)<=supplemental[title]:
+                return None
+        elif any(title!=titles[f["tool"]] for f in selected):
             return None
         clean.append({"title":title,"text":expected,"fact_ids":ids})
         used.update(ids)
-    if not clean or "probabilities" not in used or report.get("model")!="deepseek-flash":
+    if "probabilities" not in used:
         return None
     return {"fixture_id":packet["fixture_id"],"fact_hash":packet["fact_hash"],"as_of":packet["as_of"],
             "source":"deepseek","model":report["model"],"generated_at":report["generated_at"],

@@ -85,6 +85,20 @@ test('historical archive works behind an HTML fallback; missing match is exact 4
   assert.equal((await s.run()).data.source,'deepseek');
   assert.equal((await s.run('report',{id:id+'2'})).status,404);
 });
+test('shared report selects a match-specific comparison and completes verified sections',async t=>{
+  const s=await setup(t);
+  s.packet.facts.push(fact('form_comparison','prediction','主队近期场均积分高 0.25 分。'));
+  const {schema,fixture_id,revision,source,facts}=s.packet;
+  s.packet.fact_hash=await hash({schema,fixture_id,revision,source,facts});
+  const noComparison=await s.run();
+  assert.equal(noComparison.data.fallback_reason,'unverified_analysis');
+  s.setProvider(async()=>body(reply([['prediction',['form_comparison']]])));
+  const retry=await s.run('report',{now:new Date(now.valueOf()+125_000)});
+  assert.equal(retry.data.source,'deepseek');
+  assert.deepEqual(retry.data.sections[0].fact_ids,['form_comparison']);
+  assert.deepEqual(retry.data.sections.find(v=>v.title==='资料边界').fact_ids,['injuries']);
+  assert(retry.data.sections.some(v=>v.fact_ids.includes('probabilities')));
+});
 test('two cold simultaneous report requests spend once',async t=>{
   const s=await setup(t);
   await Promise.all([s.run(),s.run(),s.run(),s.run()]);

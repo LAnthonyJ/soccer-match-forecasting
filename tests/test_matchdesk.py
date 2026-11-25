@@ -29,17 +29,27 @@ class MatchdeskTests(TestCase):
         for i,opponent in enumerate(("Chelsea","Fulham","Liverpool","Brentford")):
             when = now + timedelta(days=i-1,minutes=-1 if i==1 else 0)
             matches.append({"id":str(i),"date":when.date().isoformat(),"kickoff_utc":when.isoformat(),
-                            "season":"2026-27","hg":None,"home":"Arsenal","away":opponent})
+                            "season":"2026-27","hg":None,"ag":None,"schedule_status":"verified","home":"Arsenal","away":opponent})
+        shortly = (now + timedelta(minutes=30)).isoformat()
+        matches.extend([{**matches[2],"id":"unconfirmed","away":"Newcastle United","date":shortly[:10],
+                         "kickoff_utc":None,"schedule_status":"unconfirmed"},
+                        {**matches[2],"id":"conflict","away":"Brighton & Hove Albion","date":shortly[:10],
+                         "kickoff_utc":shortly,"schedule_status":"conflict"}])
         with patch.object(service,"fixtures",return_value=matches):
-            answer = service.ask("阿森纳下一场踢谁","3")["answer"]
-            self.assertIn("利物浦",answer)
-            self.assertNotIn("富勒姆",answer)
+            result = service.ask("阿森纳下一场踢谁","3")
+            self.assertEqual(result["fixture_id"],"2")
+            self.assertIn("利物浦",result["answer"])
             trial = {"season":"2026-27","paired":2,"model_loss":1.0,"market_loss":1.05}
-            with patch.object(service,"formal_report",return_value={"seasons":[],"pilot":{"seasons":[trial]}}), \
+            stamp = "2026-11-25T18:00:00+00:00"
+            with patch.object(service,"formal_report",return_value={"as_of":stamp,"seasons":[],"pilot":{"seasons":[trial]}}), \
                     patch.object(service,"public_ledger",return_value={}):
                 self.assertIn("试运行有 2 场",service.ask("2026-27 试运行成绩")["answer"])
                 self.assertIn("正式评测尚无",service.ask("2026-27 正式评测")["answer"])
                 self.assertIn("历史回放有",service.ask("2025-26 历史回放成绩")["answer"])
+                trial.update(paired=0,sample_note="等待确认赛果 2 场，已记录缺少合格同期报价 3 场。")
+                answer = service.ask("2026-27 试运行成绩")["answer"]
+                self.assertIn(trial["sample_note"],answer)
+                self.assertIn(stamp,answer)
 
     def test_verified_watermark_stops_at_gap_and_advances_after_observed_correction(self):
         rows = [{"season":"2026-27","date":f"2026-09-0{i}","kickoff_utc":f"2026-09-0{i}T15:00:00Z",
@@ -51,6 +61,20 @@ class MatchdeskTests(TestCase):
         self.assertEqual(mark(7)["settled_through"],"2026-09-03")
         rows[0].update(source_conflict=True)
         self.assertIsNone(mark(7)["settled_through"])
+
+    def test_protocol_window_uses_the_selected_revised_kickoff(self):
+        from epl_agent import schedule
+        for kickoff,deadline in (("2026-11-27T20:00:00+00:00","2026-11-26T20:00:00+00:00"),
+                                 ("2026-11-29T16:30:00+00:00","2026-11-28T16:30:00+00:00")):
+            game={"id":"match","date":kickoff[:10],"kickoff_utc":kickoff,"home":"Arsenal","away":"Chelsea",
+                  "schedule_status":"verified","trace":{"cutoff":deadline}}
+            with patch.object(service,"fixtures",return_value=[game]):
+                answer=service.ask("这场的 T−24 截止、冻结窗口是什么时候？",game["id"])
+            self.assertEqual(answer["answer"],schedule.protocol_window_text(game))
+            self.assertIn(deadline,answer["answer"])
+            self.assertIn((datetime.fromisoformat(deadline)-timedelta(minutes=15)).isoformat(),answer["answer"])
+            self.assertIn((datetime.fromisoformat(deadline)-timedelta(minutes=2)).isoformat(),answer["answer"])
+            self.assertIn("待定",schedule.protocol_window_text(dict(game,schedule_status="conflict")))
     def test_unknown_kickoff_and_frozen_model_without_prices(self):
         original = next(m for m in data.load_matches() if m["id"]=="2026-27_fulham_manchester-united")
         replay = service.history()[0][original["id"]]

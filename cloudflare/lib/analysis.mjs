@@ -1,4 +1,4 @@
-import {ApiError, completeReport, isCurrent, jsonBody, loadFacts, renderCalls, reviewFacts, templateCalls, unsupported, validCached, viewFor, visitorKey} from './facts.mjs';
+import {ApiError, completeReport, cutoffAnswer, isCurrent, jsonBody, loadFacts, renderCalls, reviewFacts, templateCalls, unsupported, validCached, viewFor, visitorKey} from './facts.mjs';
 import {cached,reserve,settle} from './budget.mjs';
 import {configured,decode,infer,MODEL,prepare,PROMPT,usage} from './provider.mjs';
 import {lookupCatalog} from './catalog.mjs';
@@ -52,6 +52,8 @@ export async function handle(context,kind,options={}) {
       const lookup=await lookupCatalog(env,request,question,now,timezone);
       if (lookup) return json({...response(packet,view,'template',lookup.sections,lookup.reason,now),
         catalog_as_of:lookup.as_of??null,choices:lookup.choices??[]});
+      const timing=cutoffAnswer(packet.facts,question);
+      if (timing) return json(response(packet,view,'template',timing,'schedule_lookup',now));
     }
     // A report never requests the separate result asset, even after full time.
     const review=view==='postmatch'?await reviewFacts(env,request,packet):null;
@@ -95,8 +97,6 @@ export async function handle(context,kind,options={}) {
       amount=usage(raw,prepared);
       const sections=decode(raw,facts);
       const refs=new Set(sections.flatMap(s=>s.fact_ids));
-      const comparisons=facts.filter(f=>['form_comparison','goals_comparison','draw_margin','market_leader'].includes(f.id));
-      if (kind==='report' && comparisons.length && !comparisons.some(f=>refs.has(f.id))) throw new Error('unverified_analysis');
       const comparisons=facts.filter(f=>['form_comparison','goals_comparison','draw_margin','market_leader'].includes(f.id));
       if (kind==='report' && comparisons.length && !comparisons.some(f=>refs.has(f.id))) throw new Error('unverified_analysis');
       if (view==='postmatch' && !facts.some(f=>f.stage==='postmatch' && refs.has(f.id))) throw new Error('unverified_analysis');

@@ -356,9 +356,17 @@ def _cohort_report(fixtures, ledger, now, years, *, official):
         eligible[season].append(scored)
         all_rows.append(scored)
     seasons = []
+    reasons_by_season = defaultdict(Counter)
+    for item in details:
+        reasons_by_season[item["season"]][item["reason"]] += 1
+    no_quote_reasons = ("missing_api_key","no_api_key","quota_reserve","provider_unavailable","event_missing",
+                        "insufficient_books","deadline_reserve","missing_market","no_event","late_receipt")
     for s in years:
         rows = eligible[s]
+        reasons = reasons_by_season[s]
+        pending, no_quote = reasons["pending_result"], sum(reasons[k] for k in no_quote_reasons)
         seasons.append({"season":s,"total":totals[s],"finished":finished[s],"paired":len(rows),
+                        "sample_note":f"等待确认赛果 {pending} 场，已记录缺少合格同期报价 {no_quote} 场。",
                         "coverage":len(rows)/max(finished[s],1),"model_loss":metrics(rows,"b")["log_loss"],
                         "market_loss":metrics(rows,"market")["log_loss"]})
     delta,ci = interval(all_rows)

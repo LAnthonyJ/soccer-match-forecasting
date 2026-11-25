@@ -5,7 +5,6 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 from html.parser import HTMLParser
-import ipaddress
 import json
 import os
 from pathlib import Path
@@ -67,15 +66,12 @@ def read(session,url,*,limit=1_000_000):
 
 
 def network(session,url,net):
-    info=dict(line.split("=",1) for line in read(session,url+"/cdn-cgi/trace",limit=4096).decode().splitlines() if "=" in line)
-    ip=ipaddress.ip_address(info["ip"])
-    if not ip.is_global or info.get("loc")!="CN":
+    info=json.loads(read(session,url+"/api/monitor/network",limit=4096))
+    if info.get("country")!="CN":
         raise ValueError("unverified_mainland_egress")
-    result=json.loads(read(session,"https://stat.ripe.net/data/network-info/data.json?resource="+str(ip)))
-    asns={int(a) for a in result["data"]["asns"]}
-    if not asns or not asns.issubset(NETWORKS[net]):
+    if info.get("asn") not in NETWORKS[net]:
         raise ValueError("unverified_carrier_asn")
-    return sorted(asns)
+    return [info["asn"]]
 
 
 class Assets(HTMLParser):
@@ -125,6 +121,8 @@ def health(session,url,fixed):
         prefix=next(r.iter_content(512),b"").lstrip()
         if not prefix.startswith(b'{"data":'):
             raise ValueError("download_not_a_snapshot")
+    if read(session,url+"/public-data-commit.txt",limit=100).decode().strip()!=sha:
+        raise ValueError("batch_changed_during_probe")
     return {"sha":sha,"fixture_id":fid,"fact_hash":facts["fact_hash"],"sha_seen_at":stamp().isoformat()}
 
 
@@ -142,7 +140,7 @@ def open_db(path):
     conn=sqlite3.connect(path,timeout=10)
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS claims(network TEXT,site TEXT,utc_day TEXT,slot INTEGER,PRIMARY KEY(network,site,utc_day));
-        CREATE TABLE IF NOT EXISTS browser_claims(network TEXT,site TEXT,utc_day TEXT,PRIMARY KEY(network,site,utc_day));
+        CREATE TABLE IF NOT EXISTS slot_claims(network TEXT,site TEXT,slot INTEGER,PRIMARY KEY(network,site,slot));
         CREATE TABLE IF NOT EXISTS samples(network TEXT,site TEXT,slot INTEGER,body TEXT,signature TEXT,PRIMARY KEY(network,site,slot));
     """)
     return conn
@@ -152,8 +150,12 @@ def sample(db,net,site,fixed,do_browser=False):
     key=key_for(net)
     started=stamp()
     slot=int(started.timestamp())//SLOT
-    if db.execute("SELECT 1 FROM samples WHERE network=? AND site=? AND slot=?",(net,site,slot)).fetchone():
-        return
+    with db:
+        if db.execute("SELECT 1 FROM samples WHERE network=? AND site=? AND slot=?",(net,site,slot)).fetchone():
+            return
+        # A crashed probe leaves a missing observation. A retry must not replace a failed slot.
+        if not db.execute("INSERT OR IGNORE INTO slot_claims VALUES(?,?,?)",(net,site,slot)).rowcount:
+            return
     row={"network":net,"site":site,"at":started.isoformat(),"slot":slot,"asns":[],"ok":False,"ai":None,"browser_at":None}
     with requests.Session() as session:
         session.trust_env=False
@@ -166,22 +168,25 @@ def sample(db,net,site,fixed,do_browser=False):
         if row["ok"]:
             day=started.date().isoformat()
             with db:
-                first=db.execute("""INSERT OR IGNORE INTO claims SELECT ?,?,?,? WHERE NOT EXISTS
-                                (SELECT 1 FROM claims WHERE network=? AND site=? AND slot>?)""",
-                                 (net,site,day,slot,net,site,slot-86400//SLOT)).rowcount==1
-            if first:
+                first=db.execute("INSERT OR IGNORE INTO claims VALUES(?,?,?,?)",(net,site,day,slot)).rowcount==1
+            if first and not do_browser:
                 try:
                     row["ai"]=live_ai(session,site,row)
                 except (OSError,ValueError,KeyError):
                     row["ai"]="failed"
-            with db:
-                first_browser=do_browser and db.execute("INSERT OR IGNORE INTO browser_claims VALUES(?,?,?)",(net,site,day)).rowcount==1
-            if first_browser:
+            if first and do_browser:
                 try:
-                    subprocess.run(["node",str(ROOT/"scripts"/"monitor_browser.cjs"),site,row["fixture_id"]],
-                                   timeout=90,check=True,capture_output=True)
-                    row["browser_at"]=stamp().isoformat()
-                except (OSError,subprocess.SubprocessError):
+                    run=subprocess.run(["node",str(ROOT/"scripts"/"monitor_browser.cjs"),site,
+                                        row["fixture_id"],row["fact_hash"],str(row["asns"][0])],
+                                       timeout=120,check=True,capture_output=True)
+                    result=json.loads(run.stdout)
+                    row["ai"]=result["ai"] if result["ai"] in ("deepseek","fallback") else "failed"
+                    if result["completed"]:
+                        row["browser_at"]=stamp().isoformat()
+                    else:
+                        row["browser_error"]=True
+                except (OSError,subprocess.SubprocessError,ValueError,KeyError):
+                    row["ai"]="failed"
                     row["browser_error"]=True
     sig=hmac.new(key,canonical(row),hashlib.sha256).hexdigest()
     with db:
@@ -206,6 +211,7 @@ def summarize(records,site,end,keys,manifest):
             raise ValueError("Conflicting observations for the same probe and time slot")
         by_net[net][slot]=row
     coverage=bool(manifest and manifest.get("schema")=="epl-upload-times/v1" and
+                  manifest.get("from_utc") and manifest.get("through_utc") and
                   instant(manifest["from_utc"])<=start and instant(manifest["through_utc"])>=end)
     uploads=[]
     if coverage:
@@ -224,6 +230,8 @@ def summarize(records,site,end,keys,manifest):
         good=[r for r in verified if r["ok"]]
         ai_days={r["at"][:10] for r in good if r["ai"]=="deepseek"}
         browser=max((r["browser_at"] for r in good if r.get("browser_at")),default=None)
+        ai_counts={outcome:sum(r["ai"]==outcome for r in verified) for outcome in ("deepseek","fallback","failed")}
+        attempts=sum(ai_counts.values())
         delays={}
         for sha,uploaded in uploads:
             found=[instant(r["sha_seen_at"]) for r in observed if r["ok"] and r.get("sha")==sha and instant(r["sha_seen_at"])>=uploaded]
@@ -232,7 +240,10 @@ def summarize(records,site,end,keys,manifest):
         recorded=sum(slot<last for slot in items)
         summary[net]={"expected_slots":SLOTS,"recorded_slots":recorded,"missing_slots":SLOTS-recorded,
                       "verified_slots":len(verified),"healthy_slots":len(good),"availability":len(good)/SLOTS,
-                      "ai_days":sorted(ai_days),"browser_at":browser,"upload_delay_seconds":delays,
+                      "unverified_slots":recorded-len(verified),"failed_core_slots":len(verified)-len(good),
+                      "ai_days":sorted(ai_days),"ai_attempts":attempts,"ai_outcomes":ai_counts,
+                      "ai_error_rate":(attempts-ai_counts["deepseek"])/attempts if attempts else None,
+                      "browser_at":browser,"upload_delay_seconds":delays,
                       "passed":len(good)/SLOTS>=.995 and len(ai_days)==7 and bool(browser) and sha_ok}
     return {"from_utc":start.isoformat(),"through_utc":end.isoformat(),"upload_manifest_verified_range":coverage,
             "carriers":summary,"passed":all(c["passed"] for c in summary.values())}
@@ -252,6 +263,7 @@ def main():
     report.add_argument("--origin",required=True,type=origin)
     report.add_argument("--end",required=True,help="Exclusive UTC date YYYY-MM-DD")
     report.add_argument("--uploads",type=Path)
+    report.add_argument("--require-pass",action="store_true",help="Exit with status 1 when any carrier fails")
     args=parser.parse_args()
     if args.action=="sample":
         with closing(open_db(args.db)) as conn:
@@ -261,11 +273,13 @@ def main():
         for path in args.db:
             with closing(sqlite3.connect(path.resolve().as_uri()+"?mode=ro",uri=True)) as conn:
                 rows.extend(conn.execute("SELECT body,signature FROM samples"))
-        manifest=json.loads(args.uploads.read_text("utf8")) if args.uploads else None
+        manifest=json.loads(args.uploads.read_text("utf-8-sig")) if args.uploads else None
         end=instant(args.end+"T00:00:00Z")
         result=summarize(rows,args.origin,end,{net:key_for(net) for net in NETWORKS},manifest)
     if result is not None:
         print(json.dumps(result,ensure_ascii=False))
+    if args.action=="report" and args.require_pass and not result["passed"]:
+        raise SystemExit(1)
 
 
 if __name__=="__main__":

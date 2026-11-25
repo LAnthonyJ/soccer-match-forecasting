@@ -120,6 +120,11 @@ export function renderCalls(calls, facts) {
   });
 }
 
+export function cutoffAnswer(facts, question) {
+  if (!/截止|截点|窗口|冻结时|T[\s−–-]?24|cutoff|deadline/i.test(question)) return null;
+  const field=facts.find(f=>f.id==='protocol_cutoff')??facts.find(f=>f.id==='kickoff');
+  return field ? renderCalls([{tool:'fixture',ids:[field.id]}],facts) : null;
+}
 export function templateCalls(facts, question, kind) {
   const requested=/市场|盘口|赔率|分歧|market/i.test(question)?'market':
     /成绩|赛季|评分|复盘|结算|领先|得了多少分/i.test(question)?'evaluation':
@@ -150,7 +155,7 @@ export function validCached(saved,packet) {
   const used=new Set();
   for (const s of saved.sections) {
     if (!['赛程与时点','赛果判断','市场比较','模型成绩','赛前判断','球队近况','市场对照','资料边界'].includes(s.title) ||
-        !Array.isArray(s.fact_ids) || !s.fact_ids.length) return false;
+        !Array.isArray(s.fact_ids) || !s.fact_ids.length || new Set(s.fact_ids).size!==s.fact_ids.length) return false;
     const facts=s.fact_ids.map(id=>packet.facts.find(f=>f.id===id));
     if (facts.some(f=>!f || used.has(f.id)) || s.text!==facts.map(f=>f.text).join(' ')) return false;
     facts.forEach(f=>used.add(f.id));

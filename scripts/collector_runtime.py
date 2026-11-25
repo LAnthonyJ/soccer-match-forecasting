@@ -112,7 +112,17 @@ def run_worker(home):
     sink.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
     log.addHandler(sink)
     try:
-        with subprocess.Popen([sys.executable, "-u", "-m", "epl_agent", "worker", "--publish", "--publish-snapshot"],
+        command = [sys.executable, "-u", "-m", "epl_agent", "worker"]
+        if os.getenv("EPL_GITHUB_TOKEN"):
+            command.append("--publish")
+        if os.getenv("EPL_SNAPSHOT_GITHUB_TOKEN"):
+            command.append("--publish-snapshot")
+        if "--publish-snapshot" not in command or "--publish" not in command:
+            from epl_agent import operations
+            operations.set_values(home, publication_status="credentials_missing")
+            log.warning("GitHub credentials unavailable for one or more publication steps. "
+                        "Local collection continues. Restart the collector after restoring credentials.")
+        with subprocess.Popen(command,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding="utf8", errors="replace") as child:
             for line in child.stdout:
                 log.info("%s",line.rstrip())
@@ -141,10 +151,16 @@ def main():
     issue = os.environ["EPL_EVIDENCE_ISSUE"]
     if not re.fullmatch(r"[A-Za-z0-9-]+/[A-Za-z0-9_.-]+",repo) or not re.fullmatch(r"[1-9][0-9]*",issue):
         raise ValueError("Invalid GitHub repository or issue")
-    github_credentials(repo,args.git_credential)
     if args.action=="check":
+        github_credentials(repo,args.git_credential)
         print(json.dumps(check(args.root,repo,issue),ensure_ascii=True))
         return 0
+    try:
+        github_credentials(repo,args.git_credential)
+    except (OSError,ValueError,subprocess.SubprocessError):
+        # Scheduled identities may temporarily lose their Git credential store.
+        # Local deadlines remain binding while the publication lanes are offline.
+        pass
     return run_worker(args.root)
 
 

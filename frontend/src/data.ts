@@ -27,17 +27,17 @@ export interface Prediction {
 export interface Fixture {
   partial?:boolean;
   trace?:FixtureTrace; trace_answer?:string;
-  schedule_status?:string; schedule_source?:string|null;
+  schedule_status?:string; schedule_source?:string|null; schedule_window?:string;
   score_sources?:Record<string,{observed_at?:string;score?:number[]|null}>;
   id:string; season:string; date:string; kickoff_utc:string|null; home:string; away:string; home_zh?:string; away_zh?:string;
   round?:string|number|null; hg:number|null; ag:number|null; prediction:Prediction|null;
   result_source?:string|null; source_conflict?:unknown; freeze_note?:string; market_note?:string; market_reason?:string; evidence?:string|null;
   explanation?:string; draw_explanation?:string; market_explanation?:string; independent_market_explanation?:string;
 }
-export interface SeasonScore {season:string; total:number; paired:number; coverage:number; model_loss:number|null; market_loss:number|null}
+export interface SeasonScore {season:string; total:number; paired:number; coverage:number; model_loss:number|null; market_loss:number|null; sample_note?:string}
 type MarketMetrics = Partial<Record<'a'|'market'|'b',{accuracy:number|null;log_loss:number|null;brier:number|null}>>
 export interface Report {
-  scores?:MarketMetrics;
+  scores?:MarketMetrics; as_of?:string;
   status:'accumulating'|'unproven'|'leading'; n_pairs:number; seasons:SeasonScore[];
   delta:number|null; ci:[number,number]|null; missing:Record<string,number>;
   independent?:Independent; pilot?:{n_pairs:number; scores?:MarketMetrics; missing?:Record<string,number>; rows?:MarketRow[]; seasons:SeasonScore[]; independent?:Independent}; rows?:MarketRow[];
@@ -59,7 +59,7 @@ export interface Dashboard {
   health?:Health; public_snapshot?:boolean; archive_seasons?:string[]; last_scored_date?:string|null; last_complete_season?:string|null; team_aliases?:Record<string,string[]>; report:Report
 }
 export type Choice = {id:string; label:string}
-export type Answer = {answer:string;choices?:Choice[]}
+export type Answer = {answer:string;choices?:Choice[];fixture_id?:string}
 export const pct = (value: number | null | undefined) => value == null || !Number.isFinite(value) ? '—' : (value*100).toFixed(1)+'%'
 export const num = (n: number|null|undefined, d=3) => n == null || !Number.isFinite(n) ? '—' : n.toFixed(d)
 export const sides = ['主胜','平局','客胜']
@@ -137,20 +137,21 @@ export function localAnswer(question:string,selected:Fixture|undefined,data:Dash
   const tracing=/这场得|这场评分|这场的评分|这场的成绩|结算|见证|时间线|这场比赛得|单场评分/.test(q)
   if (!tracing && /过去|成绩|表现比|领先市场|赛季模型|战绩|评测|试运行|历史回放|beat the market|上赛季/.test(q)) {
     const r=data.report
+    const scoreAnswer=(text:string)=>({answer:text+' 数据截至 '+(r.as_of||data.updated_at)+'。'})
     const season=q.match(/20\d\d-\d\d/)?.[0] || (/过去一季|上赛季/.test(q)?data.last_complete_season:null)
     if(season){
       if(/历史|回放/.test(q)){
         const row=r.history.seasons.find(x=>x.season===season)
-        return {answer:row?season+' 历史回放有 '+row.n+' 场，模型 A 平均对数损失 '+num(row.log_loss,4)+'，Brier 分数 '+num(row.brier,4)+'。':season+' 赛季尚无历史回放评分。'}
+        return scoreAnswer(row?season+' 历史回放有 '+row.n+' 场，模型 A 平均对数损失 '+num(row.log_loss,4)+'，Brier 分数 '+num(row.brier,4)+'。':season+' 赛季尚无历史回放评分。')
       }
       const official=r.seasons.find(x=>x.season===season)
       const pilot=r.pilot?.seasons.find(x=>x.season===season)
       const label=q.includes('正式')?'正式评测':q.includes('试运行')?'试运行':''
       const s=label==='正式评测'?official:label==='试运行'?pilot:official||pilot
-      if(!s?.paired) return {answer:season+' 赛季'+label+'尚无可核验的同场市场配对，无法判断该季是否领先。'}
-      return {answer:season+' 赛季'+(s===official?'正式评测':'试运行')+'有 '+s.paired+' 场有效配对，融合模型和市场平均对数损失分别为 '+num(s.model_loss,4)+'、'+num(s.market_loss,4)+'。'}
+      if(!s?.paired) return scoreAnswer(season+' 赛季'+(label||(s?(s===official?'正式评测':'试运行'):''))+'尚无可核验的同场市场配对（0 场），无法判断该季是否领先。'+(s?.sample_note||''))
+      return scoreAnswer(season+' 赛季'+(s===official?'正式评测':'试运行')+'有 '+s.paired+' 场有效配对，融合模型和市场平均对数损失分别为 '+num(s.model_loss,4)+'、'+num(s.market_loss,4)+'。')
     }
-    return {answer:'正式评测有 '+r.n_pairs+' 场可核验配对，目前'+statusLabels[r.status]+'。'}
+    return scoreAnswer('正式评测有 '+r.n_pairs+' 场可核验配对，目前'+statusLabels[r.status]+'。')
   }
   const teams=new Set<string>()
   for(const [team,aliases] of Object.entries(data.team_aliases||{})) {
@@ -162,9 +163,14 @@ export function localAnswer(question:string,selected:Fixture|undefined,data:Dash
     const today=new Date();today.setHours(0,0,0,0)
     const sat=new Date(today);sat.setDate(today.getDate()+(today.getDay()===0?-1:(6-today.getDay()+7)%7))
     const end=new Date(sat);end.setDate(sat.getDate()+2)
-    games=games.filter(m=>{const d=new Date(m.kickoff_utc||m.date+'T12:00:00');return m.hg===null&&(weekend?d>=sat&&d<end:m.kickoff_utc?+d>Date.now():d>=today)})
+    const now=Date.now()
+    games=games.filter(m=>{
+      if(m.schedule_status!=='verified'||!m.kickoff_utc||m.hg!==null||m.ag!==null||m.source_conflict)return false
+      const time=Date.parse(m.kickoff_utc)
+      return time>now&&(!weekend||time>=+sat&&time<+end)
+    })
   }
-  const f=next?games.slice().sort((a,b)=>a.date.localeCompare(b.date)||(a.kickoff_utc||'').localeCompare(b.kickoff_utc||'')||a.id.localeCompare(b.id))[0]
+  const f=next?games.slice().sort((a,b)=>Date.parse(a.kickoff_utc!)-Date.parse(b.kickoff_utc!)||a.id.localeCompare(b.id))[0]
     :games.find(m=>m.id===selected?.id) || (games.length===1?games[0]:undefined)
   if(!f){
     const now=Date.now()
@@ -172,8 +178,10 @@ export function localAnswer(question:string,selected:Fixture|undefined,data:Dash
     return {answer:games.length?'请选择具体场次。':'已收录的赛程中没有找到符合条件的比赛。',choices:games.slice(0,8).map(m=>({id:m.id,label:m.date+' · '+m.home+' – '+m.away}))}
   }
   const title=f.date+' '+nameOf(f,'home')+' 对 '+nameOf(f,'away')
+  if(/截止|采集窗口|冻结窗口|t\s*[-−－]?\s*24/.test(q)) return {answer:f.schedule_window||'开球时间尚未核实，正式冻结窗口待定。',fixture_id:f.id}
   if(tracing) return {answer:f.trace_answer||'本场没有可评分的前瞻冻结记录。'}
-  if(next||/踢谁|对手|何时|时间|赛程|weekend/.test(q)) return {answer:title+'。开球时间（UTC）：'+(f.kickoff_utc||'待核实')+'。'}
+  if(next||/踢谁|对手|何时|时间|赛程|weekend/.test(q)) return {answer:title+'。开球时间（UTC）：'+(f.kickoff_utc||'待核实')+'。',fixture_id:f.id,
+    choices:next?[{id:f.id,label:nameOf(f,'home')+' 对 '+nameOf(f,'away')}]:[]}
   const marketQuestion=/市场|分歧|赔率|market/.test(q)
   if(!f.prediction){
     const note=marketQuestion?f.market_note:f.freeze_note

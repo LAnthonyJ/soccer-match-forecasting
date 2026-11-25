@@ -262,7 +262,7 @@ def board_view(full):
             cards.append(card)
     result = dict(full, compact=True, fixtures=cards)
     r = full["report"]
-    result["report"] = {"n_pairs":r["n_pairs"],"status":r["status"],"seasons":r["seasons"],
+    result["report"] = {"n_pairs":r["n_pairs"],"status":r["status"],"as_of":r.get("as_of"),"seasons":r["seasons"],
                         "pilot":{"seasons":r.get("pilot",{}).get("seasons",[])},
                         "history":{"n":r["history"]["n"],"seasons":r["history"]["seasons"]}}
     result["week_catalog"] = full.get("week_catalog") or {s:sorted({_week(m) for m in games if m["season"]==s}) for s in {m["season"] for m in games}}
@@ -347,6 +347,9 @@ def _attach_trace(games,matches,ledger,report,now,snapshot=None):
     versions = data.load_versions(root_dir()/"fixtures.sqlite3") if snapshot is None else snapshot["versions"]
     deployments = operations.public_deployments() if snapshot is None else snapshot.get("deployments",[])
     lifecycle.attach(games,matches,versions,ledger,report,deployments,now)
+    for game in games:
+        if game.get("schedule_status") == "verified" and game.get("kickoff_utc"):
+            game["schedule_window"] = schedule.protocol_window_text(game)
 
 
 def export_history_assets(directory, dashboard_dict, *, snapshot=None):
@@ -449,6 +452,9 @@ def ask(question, fixture_id=None, zone="Europe/London"):
     trace_question = any(word in q for word in ("这场得","这场评分","这场的评分","这场的成绩","结算","见证","时间线","这场比赛得","单场评分"))
     if not trace_question and any(x in q for x in ("过去","上赛季","成绩","表现比","领先市场","赛季模型","战绩","评测","试运行","历史回放","beat the market")):
         report = formal_report(matches,public_ledger())
+        def score_reply(message):
+            stamp = report.get("as_of")
+            return reply(message + (f" 数据截至 {stamp}。" if stamp else ""))
         requested = re.search(r"20\d\d-\d\d",q)
         season = requested.group() if requested else None
         if not season and ("过去一季" in q or "上赛季" in q):
@@ -458,18 +464,20 @@ def ask(question, fixture_id=None, zone="Europe/London"):
             if "历史" in q or "回放" in q:
                 row = next((s for s in history()[1]["seasons"] if s["season"]==season),None)
                 if row:
-                    return reply(f"{season} 历史回放有 {row['n']} 场，模型 A 平均对数损失 {row['log_loss']:.4f}，Brier 分数 {row['brier']:.4f}。")
-                return reply(f"{season} 赛季尚无历史回放评分。")
+                    return score_reply(f"{season} 历史回放有 {row['n']} 场，模型 A 平均对数损失 {row['log_loss']:.4f}，Brier 分数 {row['brier']:.4f}。")
+                return score_reply(f"{season} 赛季尚无历史回放评分。")
             official = next((s for s in report["seasons"] if s["season"]==season),None)
             pilot = next((s for s in report.get("pilot",{}).get("seasons",[]) if s["season"]==season),None)
             summary = official if "正式" in q else pilot if "试运行" in q else official or pilot
             if not summary or not summary["paired"]:
                 label = "正式评测" if "正式" in q else "试运行" if "试运行" in q else ""
-                return reply(f"{season} 赛季{label}尚无可核验的同场市场配对，无法判断该季是否领先。")
-            return reply(f"{season} 赛季{'正式评测' if summary is official else '试运行'}有 {summary['paired']} 场有效配对，融合模型和市场平均对数损失分别为 "
+                if not label and summary:
+                    label = "正式评测" if summary is official else "试运行"
+                return score_reply(f"{season} 赛季{label}尚无可核验的同场市场配对（0 场），无法判断该季是否领先。" + (summary or {}).get("sample_note",""))
+            return score_reply(f"{season} 赛季{'正式评测' if summary is official else '试运行'}有 {summary['paired']} 场有效配对，融合模型和市场平均对数损失分别为 "
                          f"{summary['model_loss']:.4f}、{summary['market_loss']:.4f}。")
         status = {"accumulating":"正在积累样本","leading":"在预注册赛季和时点领先","unproven":"尚未证实领先"}
-        return reply(f"正式评测有 {report['n_pairs']} 场可核验配对，目前{status[report['status']]}。")
+        return score_reply(f"正式评测有 {report['n_pairs']} 场可核验配对，目前{status[report['status']]}。")
     teams = set()
     for team,names in data.ALIASES.items():
         for word in (team,*names):
@@ -487,9 +495,10 @@ def ask(question, fixture_id=None, zone="Europe/London"):
         weekend = "周末" in q or "weekend" in q
         candidates = []
         for m in matches:
-            md = instant(m["kickoff_utc"]).astimezone(tz).date() if m["kickoff_utc"] else date.fromisoformat(m["date"])
-            upcoming = instant(m["kickoff_utc"])>clock if m["kickoff_utc"] else md>=today
-            if m["hg"] is None and (sat<=md<=sat+timedelta(days=1) if weekend else upcoming):
+            if not schedule.confirmed_unplayed(m):
+                continue
+            kickoff = instant(m["kickoff_utc"]).astimezone(tz)
+            if kickoff > clock and (not weekend or sat <= kickoff.date() <= sat+timedelta(days=1)):
                 candidates.append(m)
     else:
         candidates = matches
@@ -499,14 +508,18 @@ def ask(question, fixture_id=None, zone="Europe/London"):
     selected = None if next_game else next((m for m in candidates if m["id"]==fixture_id),None)
     if not selected:
         if len(candidates)==1 or (candidates and next_game):
-            selected = min(candidates,key=lambda r:(r["date"],r.get("kickoff_utc") or "",r["id"]))
+            selected = min(candidates,key=lambda r:(instant(r["kickoff_utc"]),r["id"])) if next_game else candidates[0]
         else:
             ranked = sorted(candidates,key=lambda m:abs((date.fromisoformat(m["date"])-date.today()).days))
             return reply("请选择具体场次。" if ranked else "已收录的赛程中没有找到符合条件的比赛。",
                          [{"id":m["id"],"label":f"{m['date']} · {m['home']} – {m['away']}"} for m in ranked[:8]])
+    if re.search(r"截止|采集窗口|冻结窗口|t\s*[-−－]?\s*24",q):
+        return {**reply(schedule.protocol_window_text(selected)),"fixture_id":selected["id"]}
     if next_game or any(s in q for s in ("踢谁","对手","何时","时间","赛程","weekend")) and not trace_question:
         home,away = (data.DISPLAY_ZH.get(selected[k],selected[k]) for k in ("home","away"))
-        return reply(f"{selected['date']} {home} 对 {away}。开球时间（UTC）：{selected['kickoff_utc'] or '待核实'}。")
+        choices = [{"id":selected["id"],"label":f"{home} 对 {away}"}] if next_game else []
+        return {**reply(f"{selected['date']} {home} 对 {away}。开球时间（UTC）：{selected['kickoff_utc'] or '待核实'}。",choices),
+                "fixture_id":selected["id"]}
     game = prediction(selected["id"])
     name = f"{game['date']} {game['home_zh']} 对 {game['away_zh']}"
     if trace_question:

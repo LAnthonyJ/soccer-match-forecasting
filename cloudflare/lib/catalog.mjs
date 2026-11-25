@@ -30,7 +30,7 @@ export async function lookupCatalog(env,request,question,now,zone) {
       if (!d || (pilot && kind!=='pilot') || (official && kind!=='official')) continue;
       const text=d.paired && Number.isFinite(d.model_loss) && Number.isFinite(d.market_loss)
         ? `${name} 赛季${label}有 ${d.paired} 场同期配对，融合模型 B 的平均对数损失为 ${d.model_loss.toFixed(4)}，市场为 ${d.market_loss.toFixed(4)}。`
-        : `${name} 赛季${label}有 0 场可核验的同期市场配对。`;
+        : `${name} 赛季${label}有 0 场可核验的同期市场配对。${d.sample_note||''}`;
       sections.push(entry(label,text,'season_'+kind));
     }
     if (row?.history && Number.isFinite(row.history.log_loss)) {
@@ -62,5 +62,6 @@ export async function lookupCatalog(env,request,question,now,zone) {
       choices.push({id:game.id,label:game.home_zh+' – '+game.away_zh});
     }
   }
+  if ((season||leading) && catalog.as_of) sections.push(entry('数据时点','数据截至 '+catalog.as_of+'。','catalog_as_of'));
   return {sections,choices,as_of:catalog.as_of,reason:'catalog_lookup'};
 }

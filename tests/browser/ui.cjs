@@ -106,15 +106,24 @@ for(const width of [360,768,1440])test('archive navigation and schedule intent a
     return season.filter(f=>(f.home==='Arsenal'||f.away==='Arsenal')&&f.hg===null)
       .sort((a,b)=>a.date.localeCompare(b.date)||a.id.localeCompare(b.id))
   })
-  // Pin the visitor's clock to two known future fixtures from the shipped season.
-  assert.ok(future.length>=3)
+  // The closest date is provisional, the next kickoff is disputed, then two confirmed fixtures.
+  assert.ok(future.length>=4)
+  const updates=new Map(future.slice(0,4).map((f,i)=>[f.id,{
+    schedule_status:['unconfirmed','conflict','verified','verified'][i],
+    kickoff_utc:i===0?null:f.date+'T15:00:00Z',
+  }]))
+  await page.route('**/seasons/'+future[0].season+'.json',async route=>{
+    const response=await route.fetch()
+    const rows=(await response.json()).map(f=>({...f,...updates.get(f.id)}))
+    await route.fulfill({response,json:rows})
+  })
   await page.clock.install({time:new Date(future[0].date+'T00:00:00Z')})
-  const later=future[2]
+  const later=future[3]
   await page.goto(pages+'#/match/'+later.id)
   await page.getByRole('link',{name:'预测助手'}).click()
   await page.getByLabel('你的问题').fill('阿森纳下一场踢谁')
   await page.getByRole('button',{name:/提问/}).click()
-  await page.locator('.reply').filter({hasText:future[0].date}).waitFor()
+  await page.locator('.reply').filter({hasText:future[2].date}).waitFor()
   assert.ok(!(await page.locator('.reply').innerText()).includes(later.date))
 })
 

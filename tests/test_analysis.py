@@ -47,6 +47,51 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(client.get("/api/matches/"+self.fid+"-x/analysis").status_code,404)
         self.assertEqual(client.post("/api/analysis/ask",json={**fields,"history":"bad"}).status_code,400)
         self.assertEqual(client.get("/analysis/facts/"+self.fid+".json").json["fact_hash"],report["fact_hash"])
+        next_game={"id":"other","label":"阿森纳 对 切尔西"}
+        with patch.object(service,"ask",return_value={"fixture_id":"other","answer":"阿森纳 对 切尔西","choices":[next_game]}):
+            follow=client.post("/api/analysis/ask",json={**fields,"question":"阿森纳下一场踢谁"}).json
+            self.assertEqual((follow["fixture_id"],follow["choices"]),(self.fid,[next_game]))
+
+    def test_catalog_and_report_queue_require_confirmed_unplayed_fixtures(self):
+        game={**self.game,"hg":None,"ag":None,"schedule_status":"verified"}
+        rows=[game,{**game,"id":"preview","schedule_status":"unconfirmed"},
+              {**game,"id":"conflict","schedule_status":"conflict"},{**game,"id":"final","hg":2,"ag":0}]
+        with tempfile.TemporaryDirectory() as tmp:
+            analysis.export_assets(tmp,{"updated_at":self.stamp,"fixtures":rows,"current_id":game["id"],
+                                        "report":{"history":{},"status":"accumulating","n_pairs":0}})
+            catalog=json.loads((Path(tmp)/"analysis/catalog.json").read_text("utf8"))
+            queue=json.loads((Path(tmp)/"analysis/current.json").read_text("utf8"))
+            self.assertEqual([g["id"] for g in catalog["fixtures"]],[game["id"]])
+            self.assertEqual(queue["fixture_ids"],[game["id"]])
+
+    def test_fixed_scenarios_keep_dates_probabilities_market_and_results_in_their_own_view(self):
+        outcomes = (("主胜", [0.55,0.25,0.20]), ("平局", [0.21,0.51,0.28]), ("客胜", [0.22,0.26,0.52]))
+        for favourite, odds in outcomes:
+            for observed in (None, [0.38,0.30,0.32]):
+                for source in ("preview","frozen","replay"):
+                    for revised in (False,True):
+                        with self.subTest(favourite=favourite, market=bool(observed), source=source, revised=revised):
+                            game=copy.deepcopy(self.game)
+                            game.update(hg=19,ag=13,kickoff_utc="2026-11-28T20:00:00+00:00",
+                                        schedule_status="verified")
+                            if revised:
+                                game.update(hg=23,kickoff_utc="2026-11-29T16:30:00+00:00")
+                                game["trace"]["revision"]+=1
+                            game["trace"].pop("cutoff",None)
+                            game.pop("schedule_window",None)
+                            game["prediction"].update(a=odds,source=source,market=observed,b=None)
+                            bundle=analysis.packet(game,self.stamp)
+                            facts={f["id"]:f["text"] for f in bundle["facts"]}
+                            self.assertIn(favourite+"概率最高",facts["favourite"])
+                            for label,prob in zip(("主胜","平局","客胜"),odds):
+                                self.assertIn(f"{label} {prob:.1%}",facts["probabilities"])
+                            self.assertEqual("market_gap" in facts,observed is not None)
+                            self.assertIn("同期去水" if observed else "缺少",facts["market"])
+                            self.assertIn("2026-11-28" if revised else "2026-11-27",facts["protocol_cutoff"])
+                            self.assertIn("缺少",facts["injuries"])
+                            self.assertNotIn("result",facts)
+                            result=next(f for f in analysis._review(game,self.stamp)["facts"] if f["id"]=="result")
+                            self.assertIn(f'{game["hg"]} 比 13',result["text"])
 
     def test_mirror_publishes_only_text_supported_by_prematch_facts(self):
         bundle=analysis.packet(self.game,self.stamp)
@@ -57,6 +102,13 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(checked_report(report,bundle)["answer"],fact["text"])
         self.assertIsNone(checked_report({**report,"sections":[{**section,"text":"球员确定伤缺。"}]},bundle))
         self.assertIsNone(checked_report({**report,"view":"postmatch"},bundle))
+        injuries=next(f for f in bundle["facts"] if f["id"]=="injuries")
+        supplement={"title":"资料边界","text":injuries["text"],"fact_ids":["injuries"]}
+        complete={**report,"sections":[section,supplement]}
+        self.assertEqual(checked_report(complete,bundle)["sections"],complete["sections"])
+        self.assertIsNone(checked_report({**complete,"sections":[section,{**supplement,"title":"市场对照"}]},bundle))
+        self.assertIsNone(checked_report({**complete,"sections":[section,section]},bundle))
+        self.assertIsNone(checked_report({**complete,"generated_at":None},bundle))
 
     def test_static_archive_packet_and_review_are_separate(self):
         from epl_agent.__main__ import export_site

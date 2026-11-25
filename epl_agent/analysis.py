@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import re
 
+from . import schedule
 from .market import canonical, digest
 
 FIXTURE_ID = re.compile(r"[a-zA-Z0-9_-]{1,180}")
@@ -30,6 +31,8 @@ def packet(game, as_of):
     kickoff = game.get("kickoff_utc")
     facts = [fact("fixture","fixture",f'{game["season"]} 英超，{home}主场对{away}。'),
              fact("kickoff","fixture",f"已记录开球时刻为 {kickoff}。" if kickoff else "开球时间待核实。")]
+    if kickoff and game.get("schedule_status")=="verified":
+        facts.append(fact("protocol_cutoff","fixture",schedule.protocol_window_text(game)))
     if p:
         a = p["a"]
         facts.append(fact("model","prediction",f'{ORIGINS[source]}，独立模型版本为 {p["model_version"]}。'))
@@ -146,7 +149,7 @@ def export_assets(directory, dashboard):
     ids = []
     if current:
         for g in games:
-            if g["season"]!=current["season"] or not g.get("kickoff_utc") or g.get("hg") is not None:
+            if g["season"]!=current["season"] or not schedule.confirmed_unplayed(g):
                 continue
             same_week = g["round"]==current["round"] if current.get("round") else g["date"]==current["date"]
             if same_week and g.get("prediction"):
@@ -157,10 +160,10 @@ def export_assets(directory, dashboard):
                            ("official",dashboard["report"])):
         for row in details.get("seasons",[]):
             seasons[row["season"]][cohort] = {k:row[k] for k in
-                ("paired","finished","total","model_loss","market_loss","n","log_loss","accuracy") if k in row}
+                ("paired","finished","total","model_loss","market_loss","n","log_loss","accuracy","sample_note") if k in row}
     latest = max(recent,default=None)
     fixtures = [{k:g[k] for k in ("id","season","home","away","home_zh","away_zh","kickoff_utc")}
-                for g in games if g["season"]==latest and g.get("kickoff_utc")]
+                for g in games if g["season"]==latest and schedule.confirmed_unplayed(g)]
     catalog = {"as_of":stamp,"last_complete_season":dashboard.get("last_complete_season"),"seasons":seasons,
                "status":dashboard["report"]["status"],"n_pairs":dashboard["report"]["n_pairs"],
                "aliases":dashboard.get("team_aliases",{}),"fixtures":fixtures}
