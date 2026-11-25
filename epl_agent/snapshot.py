@@ -224,6 +224,9 @@ def expected_issue():
 def _check(batch, issue, session=None, *, version=FORMAT):
     as_of = _validate(batch,version)
     ledger = dict(batch["ledger"])
+    if version == LEGACY_FORMAT:
+        # Derived only after schema validation. Reproduce v1's published paired scores on replay.
+        ledger["legacy_pair_window"] = True
     if issue:
         audit = audit_public(ledger,session,expected_issue=issue,as_of=as_of)
         if not audit["ok"]:

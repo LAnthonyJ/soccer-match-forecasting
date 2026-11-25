@@ -116,6 +116,31 @@ test('static Pages subpath, offline answers, unavailable market and source',asyn
   await page.locator('.reply').filter({hasText:'缺少合格'}).waitFor()
   assert.ok(queried.every(url=>!url.includes('/api/')))
 })
+test('Pages distinguishes a missed freeze from absent odds in the detail and assistant',async t=>{
+  const page=await makePage(t,768,pages)
+  await page.route('**/dashboard.json',async route=>{
+    const response=await route.fetch(), data=await response.json()
+    const game=data.fixtures.find(f=>f.id===data.default_id)
+    Object.assign(game,{prediction:null,freeze_note:'错过赛前 24 小时采集窗口',market_note:'采集机未配置赔率密钥'})
+    await route.fulfill({response,json:data})
+  })
+  await page.reload()
+  const panel=page.locator('section').filter({has:page.getByRole('heading',{name:'暂无合格预测'})})
+  await panel.getByText('错过赛前 24 小时采集窗口',{exact:true}).waitFor()
+  await panel.getByText('缺少市场报价',{exact:true}).click()
+  await panel.getByText('采集机未配置赔率密钥',{exact:true}).waitFor()
+  await page.getByRole('link',{name:'预测助手'}).click()
+  for(const [question,expected,other] of [
+    ['为什么没有预测','错过赛前 24 小时采集窗口','赔率密钥'],
+    ['为什么没有市场报价','采集机未配置赔率密钥','错过赛前'],
+  ]){
+    await page.getByLabel('你的问题').fill(question)
+    await page.getByRole('button',{name:/提问/}).click()
+    const reply=page.locator('.reply').filter({hasText:expected})
+    await reply.waitFor()
+    assert.ok(!(await reply.innerText()).includes(other))
+  }
+})
 test('older seasons, keyboard navigation, real agent',async t=>{
   const page=await makePage(t,1440,live)
   await page.getByLabel('赛季',{exact:true}).selectOption('2020-21')

@@ -22,7 +22,7 @@ class VerificationTests(unittest.TestCase):
         start = datetime(int(season[:4]),8,1,16,tzinfo=timezone.utc)
         kickoff = start+timedelta(weeks=i//10)
         cutoff = kickoff-timedelta(days=1)
-        frozen = cutoff-timedelta(minutes=7)
+        frozen = cutoff-timedelta(minutes=1)
         m = {"id":season+"-"+str(i),"season":season,"hg":1,"ag":0,"home":"Example H","away":"Example A",
              "kickoff_utc":kickoff.isoformat(),"schedule_revision":1}
         a, market = [.8,.1,.1],[.4,.3,.3]
@@ -84,6 +84,32 @@ class VerificationTests(unittest.TestCase):
         for field in ("evidence","witnessed","observed"):
             ledger["records"] = [dict(row,**{field:"bogus"})]
             self.assertEqual(formal_report([m],ledger,self.now)["n_pairs"],0)
+
+    def test_quote_and_freeze_windows_have_distinct_inclusive_boundaries(self):
+        tick = timedelta(microseconds=1)
+        quotes, freeze = timedelta(minutes=15), timedelta(minutes=2)
+        for quote_lead, frozen_lead, valid in (
+                (quotes,freeze,1), (quotes,freeze+tick,0), (quotes+tick,freeze,0),
+                (quotes,timedelta(0),1), (quotes,-tick,0), (freeze-tick,freeze,0)):
+            for with_market in (False,True):
+                with self.subTest(quote=quote_lead,freeze=frozen_lead,market=with_market):
+                    fixture, row = self.row("2027-28",0,2)
+                    ledger = self.ledger()
+                    p = row["payload"]
+                    cutoff = datetime.fromisoformat(p["cutoff"])
+                    observed, frozen = (cutoff-quote_lead).isoformat(), (cutoff-frozen_lead).isoformat()
+                    p.update(schedule_observed_at=observed,observed=observed,frozen=frozen)
+                    if not with_market:
+                        p.update(market=None,b=None)
+                        row["reason"] = "no_api_key"
+                    row.update(observed=observed,witnessed=frozen,hash=digest(p))
+                    ledger["records"] = [row]
+                    ledger["public_audit"] = {"ok":True,"registration_ok":True,"registration_hash":digest(self.reg),
+                        "registration_evidence":ledger["registration_evidence"],
+                        "forecasts":{row["hash"]:{"at":frozen,"url":row["evidence"]}}}
+                    report = formal_report([fixture],ledger,self.now)
+                    self.assertEqual(report["independent"]["n_scored"],valid)
+                    self.assertEqual(report["n_pairs"],valid if with_market else 0)
 
     def test_a_only_and_paired_share_independent_cohort(self):
         ledger = self.ledger()

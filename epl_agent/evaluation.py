@@ -81,7 +81,13 @@ def _valid_vector(value):
             and math.isclose(sum(value),1.0,abs_tol=1e-8))
 
 
-def _valid_capture(m, row, reg, witness, now):
+def _in_capture_window(observed, frozen, cutoff, *, legacy_pair_window=False):
+    quote_start = cutoff - timedelta(minutes=PROTOCOL["window_minutes"])
+    freeze_start = quote_start if legacy_pair_window else cutoff - timedelta(minutes=PROTOCOL["freeze_lead_minutes"])
+    return quote_start <= observed <= frozen and freeze_start <= frozen <= cutoff
+
+
+def _valid_capture(m, row, reg, witness, now, *, legacy_pair_window=False):
     try:
         p = row["payload"]
         comment_api(row["evidence"])
@@ -101,7 +107,7 @@ def _valid_capture(m, row, reg, witness, now):
                 and instant(p["schedule_observed_at"]) <= received
                 and instant(witness["at"]) <= received
                 and row["evidence"].split("#")[0] == witness["url"].split("#")[0]
-                and cutoff-timedelta(minutes=15) <= received <= frozen <= cutoff
+                and _in_capture_window(received,frozen,cutoff,legacy_pair_window=legacy_pair_window)
                 and frozen.replace(microsecond=0) <= instant(row["witnessed"]) <= cutoff
                 and p["model_version"] == reg["model"] == p["prediction"]["model_version"]
                 and p["prediction"]["probs"] == p["a"] and p["protocol_hash"] == digest(reg)
@@ -126,7 +132,7 @@ def _independent_reason(match, row, reg, witness, audit, cutoff, now):
                 or instant(payload["cutoff"]) != cutoff or instant(row["observed"]) != observed
                 or instant(payload["schedule_observed_at"]) > observed
                 or instant(witness["at"]) > observed
-                or not cutoff-timedelta(minutes=15) <= observed <= frozen <= cutoff
+                or not _in_capture_window(observed,frozen,cutoff)
                 or frozen > now or prediction.get("historical_reconstruction")
                 or any(instant(prediction[key]) > observed for key in ("cutoff","trained_through") if prediction.get(key))
                 or payload["model_version"] != reg["model"] or prediction["model_version"] != reg["model"]
@@ -300,7 +306,7 @@ def _cohort_report(fixtures, ledger, now, years, *, official):
         if not p.get("market") or not p.get("b"):
             exclude(row["reason"])
             continue
-        if not reg_ok or not _valid_capture(m,row,reg,witness,now):
+        if not reg_ok or not _valid_capture(m,row,reg,witness,now,legacy_pair_window=ledger.get("legacy_pair_window",False)):
             exclude("unverified_forecast")
             continue
         local_pairs += 1

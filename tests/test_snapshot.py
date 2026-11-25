@@ -152,6 +152,25 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(scores["pilot"]["n_pairs"],0)
         self.assertEqual(formal_report(rows,ledger,as_of)["verification"]["pending_pairs"],1)
         self.assertEqual(trusted["ledger"]["public_audit"]["verified"],1)
+        # A v1 bundle may contain a paired score calculated with the full quote window.
+        # Preserve its archived score and hash, while a v2 replay excludes the same early freeze.
+        early_batch = deepcopy(batch)
+        early_entry = early_batch["ledger"]["records"][0]
+        early_at = (cutoff-timedelta(minutes=7)).isoformat()
+        early_entry["payload"].update(schedule_observed_at=early_at,observed=early_at,frozen=early_at)
+        early_hash = digest(early_entry["payload"])
+        early_entry.update(observed=early_at,witnessed=early_at,hash=early_hash)
+        early_comment = comment(11,early_at,"forecast "+early_hash,_summary(early_entry["payload"]))
+        early_http = Mock()
+        early_http.get.side_effect = lambda url,**kw:Mock(status_code=200,json=lambda:
+            [c1,early_comment] if url.endswith("/comments") else {"private":False})
+        legacy,legacy_scores = snapshot._check(early_batch,issue,early_http,version=snapshot.LEGACY_FORMAT)
+        current,current_scores = snapshot._check(early_batch,issue,early_http)
+        self.assertEqual(legacy_scores["formal"]["n_pairs"],1)
+        self.assertEqual(current_scores["formal"]["n_pairs"],0)
+        self.assertEqual(current_scores["formal"]["independent"]["n_scored"],0)
+        self.assertEqual(current["ledger"]["records"][0]["hash"],legacy["ledger"]["records"][0]["hash"])
+        self.assertNotIn("legacy_pair_window",early_batch["ledger"])
         solo_batch = deepcopy(batch)
         solo = solo_batch["ledger"]["records"][0]
         solo["payload"].update(market=None,b=None)

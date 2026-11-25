@@ -41,8 +41,7 @@ def attach(games, fixtures, versions, ledger, report, deployments, now):
                  "witness_status":"late" if cutoff and witness and instant(witness)>cutoff else
                                   "verified" if (ledger.get("public_audit") or {}).get("forecasts",{}).get(record.get("hash"))
                                   else "recorded" if witness else "pending" if payload else None,
-                 "freeze_reason":record.get("freeze_reason") or ("frozen" if payload else game.get("market_reason")),
-                 "market_reason":record.get("market_reason") or game.get("market_reason"),
+                 "freeze_reason":game["freeze_reason"],"market_reason":game["market_reason"],
                  "result_at":m.get("result_observed_at"),"result_source":m.get("result_source"),
                  "settlement":scored.get("reason"),"score":None,"deployed":published,
                  "schedule_history":list(prior.values())}
@@ -65,4 +64,8 @@ def attach(games, fixtures, versions, ledger, report, deployments, now):
             message = "模型 A 已冻结，等待独立核验或结算。"
         else:
             message = "本场没有可评分的前瞻冻结记录。"
-        game["trace_answer"] = message + (" " + game["market_note"] if game.get("market_note") else "")
+            if game.get("freeze_note"):
+                message += " " + game["freeze_note"] + "。"
+        if game.get("market_note") and game["market_note"] != game.get("freeze_note"):
+            message += " " + game["market_note"] + "。"
+        game["trace_answer"] = message

@@ -79,13 +79,15 @@ REASONS = {
     "prediction_error":"单场模型计算失败","pending_freeze":"等待冻结","deadline_reserve":"已预留冻结时间，未取得同期报价",
     "pending_audit": "等待公开核验", "unknown_kickoff": "开球时间待核实",
     "missing_market": "缺少合格的同期市场报价", "no_event": "该场暂无市场报价",
+    "unverified_observation": "报价接收时点与已确认赛程不符", "model_version_changed": "模型版本与注册记录不符",
+    "frozen": "模型 A 已在赛前冻结",
 }
 
 
 def explain(game, preference=None):
     p = game["prediction"]
     if not p:
-        return game.get("market_note") or "这场比赛暂无可核实的预测。"
+        return game.get("freeze_note") or "这场比赛暂无可核实的预测。"
     h, d, a = p["a"]
     heading = (f"独立模型 A 给出主胜 {h:.1%}、平局 {d:.1%}、客胜 {a:.1%}。"
                f"客胜比主胜{'高' if a >= h else '低'} {abs(a-h)*100:.1f} 个百分点。")
@@ -114,13 +116,15 @@ def market_text(p, independent=False):
             f"{('主胜','平局','客胜')[k]}，相对市场 {gaps[k]*100:+.1f} 个百分点。")
 
 
-def item(match, raw=None, kind="replay", market=None, b=None, *, reason=None, evidence=None):
+def item(match, raw=None, kind="replay", market=None, b=None, *, reason=None, freeze_reason=None, evidence=None):
     row = {k:match.get(k) for k in ("id","season","date","kickoff_utc","round","home","away","hg","ag","result_source","source_conflict")}
     row["home_zh"] = data.DISPLAY_ZH.get(match["home"], match["home"])
     row["away_zh"] = data.DISPLAY_ZH.get(match["away"], match["away"])
     row["prediction"] = format_prediction(raw,kind,market,b) if raw else None
     row["market_reason"] = reason
     row["market_note"] = REASONS.get(reason, reason or "")
+    row["freeze_reason"] = freeze_reason
+    row["freeze_note"] = REASONS.get(freeze_reason, freeze_reason or "")
     row["evidence"] = evidence
     if raw:
         row["explanation"] = explain(row)
@@ -128,6 +132,35 @@ def item(match, raw=None, kind="replay", market=None, b=None, *, reason=None, ev
         row["market_explanation"] = market_text(row["prediction"])
         row["independent_market_explanation"] = market_text(row["prediction"],True)
     return row
+
+
+_LEGACY_MARKET_REASONS = {"no_api_key","missing_api_key","quota_reserve","provider_unavailable",
+    "event_missing","recent_attempt","request_in_flight","insufficient_books","late_receipt",
+    "unverified_observation","collecting_quotes","deadline_reserve","missing_market","no_event"}
+
+
+def _capture_reasons(record, kickoff, due, *, replay=False, rescheduled=False):
+    """Old ledgers had one reason. Only infer the axis that their value describes."""
+    payload = record.get("payload") or {}
+    legacy = record.get("reason")
+    freeze = record.get("freeze_reason")
+    market = record.get("market_reason")
+    if not freeze and legacy and legacy not in _LEGACY_MARKET_REASONS and not payload:
+        freeze = legacy
+    if not market and legacy in _LEGACY_MARKET_REASONS:
+        market = legacy
+    if payload:
+        freeze = "frozen"
+    elif not freeze:
+        freeze = ("unknown_kickoff" if not kickoff else "rescheduled" if rescheduled
+                  else "no_matching_snapshot" if replay and not record
+                  else "missed_window" if due else "not_due")
+    if payload.get("market") is not None:
+        market = None
+    elif not market:
+        market = ("unknown_kickoff" if not kickoff else "no_historical_market" if replay
+                  else "missing_market" if due or payload else "not_due")
+    return {"freeze_reason":freeze,"reason":market}
 
 
 def _present(targets, matches, ledger, now, snapshot=None):
@@ -140,22 +173,22 @@ def _present(targets, matches, ledger, now, snapshot=None):
         key, kickoff = m["id"], m.get("kickoff_utc")
         record = captures.get((key, kickoff, m.get("schedule_revision",0)), {})
         frozen = record.get("payload")
+        due = bool(kickoff and now >= instant(kickoff) - timedelta(days=1))
+        replay = replays.get(key)
+        has_replay = bool(due and replay and models.replay_matches(replay,m))
+        reasons[key] = _capture_reasons(record,kickoff,due,replay=has_replay and not frozen,
+                                        rescheduled=key in previous and not record)
         if not kickoff:
-            games[key] = item(m, reason="unknown_kickoff")
+            games[key] = item(m, **reasons[key])
             continue
         if frozen:
             games[key] = item(m, frozen["prediction"], "frozen", frozen["market"], frozen["b"],
-                              reason=record.get("reason") if not frozen["market"] else None, evidence=record.get("evidence"))
+                              evidence=record.get("evidence"), **reasons[key])
             continue
-        cutoff = instant(kickoff) - timedelta(days=1)
-        replay = replays.get(key)
-        due = now >= cutoff
-        reason = record.get("reason") or ("rescheduled" if key in previous else None)
-        if due and replay and models.replay_matches(replay,m):
-            games[key] = item(m,replay,reason=reason or "no_historical_market")
+        if has_replay:
+            games[key] = item(m,replay,**reasons[key])
             continue
-        reasons[key] = reason or ("missed_window" if due else "not_due")
-        games[key] = item(m,reason=reasons[key])
+        games[key] = item(m,**reasons[key])
         if m["hg"] is None or not replay or m.get("observed_at"):
             (rebuild if due else previews).append(m)
     if previews or rebuild:
@@ -167,7 +200,7 @@ def _present(targets, matches, ledger, now, snapshot=None):
             preds = models.forecast_many(batch, matches, clock, model_dir=directory, **inputs)
             for m in batch:
                 if m["id"] in preds:
-                    games[m["id"]] = item(m,preds[m["id"]],kind,reason=reasons[m["id"]])
+                    games[m["id"]] = item(m,preds[m["id"]],kind,**reasons[m["id"]])
     return [games[m["id"]] for m in targets]
 
 
@@ -235,7 +268,9 @@ def export_history_assets(directory, dashboard_dict, *, snapshot=None):
         source = [m for m in data.load_matches() if m["season"] not in observed_seasons] + snapshot["fixtures"]
         ledger = snapshot["ledger"]
     older = [m for m in source if m["season"] not in included]
-    captures = {(r["id"],r["kickoff"],r["revision"]):r for r in ledger["records"] if r["payload"]}
+    captures = {(r["id"],r["kickoff"],r["revision"]):r for r in ledger["records"]}
+    previous = {r["id"] for r in ledger["records"]}
+    as_of = instant(dashboard_dict["updated_at"])
     replays = _history_for(snapshot)[0]
     season_dir = directory/"seasons"
     season_dir.mkdir(exist_ok=True)
@@ -243,15 +278,20 @@ def export_history_assets(directory, dashboard_dict, *, snapshot=None):
         rows = []
         for m in older:
             if m["season"] == season:
-                record = captures.get((m["id"],m["kickoff_utc"],m.get("schedule_revision",0)))
-                if record and m["kickoff_utc"]:
-                    frozen = record["payload"]
-                    rows.append(item(m,frozen["prediction"],"frozen",frozen["market"],frozen["b"],
-                                     reason=record["reason"] if frozen["market"] is None else None,evidence=record["evidence"]))
-                    continue
+                kickoff = m.get("kickoff_utc")
+                record = captures.get((m["id"],kickoff,m.get("schedule_revision",0)), {})
+                frozen = record.get("payload")
                 raw = replays.get(m["id"])
-                rows.append(item(m,raw if raw and m["kickoff_utc"] and models.replay_matches(raw,m) else None,reason="no_historical_market"))
-        _attach_trace(rows,source,ledger,dashboard_dict["report"],instant(dashboard_dict["updated_at"]),snapshot)
+                has_replay = bool(raw and kickoff and models.replay_matches(raw,m))
+                due = bool(kickoff and as_of >= instant(kickoff)-timedelta(days=1))
+                reasons = _capture_reasons(record,kickoff,due,replay=has_replay and not frozen,
+                                           rescheduled=m["id"] in previous and not record)
+                if frozen and kickoff:
+                    rows.append(item(m,frozen["prediction"],"frozen",frozen["market"],frozen["b"],
+                                     evidence=record.get("evidence"),**reasons))
+                    continue
+                rows.append(item(m,raw if has_replay else None,**reasons))
+        _attach_trace(rows,source,ledger,dashboard_dict["report"],as_of,snapshot)
         (season_dir/(season+".json")).write_text(json.dumps(rows,ensure_ascii=False,separators=(",",":")),encoding="utf8")
 
 
@@ -329,9 +369,11 @@ def ask(question, fixture_id=None, zone="Europe/London"):
     if any(s in q for s in ("踢谁","对手","何时","时间","赛程","weekend")):
         return reply(f"{name}。开球时间（UTC）：{game['kickoff_utc'] or '待核实'}。")
     p = game["prediction"]
+    market_question = any(s in q for s in ("市场","分歧","赔率","market"))
     if not p:
-        return reply(f"{name} 暂无已核实的赛前预测。{game['market_note']}。")
-    if any(s in q for s in ("市场","分歧","赔率","market")):
+        note = game.get("market_note" if market_question else "freeze_note")
+        return reply(f"{name} 暂无已核实的赛前预测。" + (note+"。" if note else ""))
+    if market_question:
         if not p.get("market") and game.get("market_note"):
             return reply(f"{name}。"+game["market_note"]+"。缺少合格的同期市场快照，无法计算市场分歧。")
         use_a = any(word in q for word in ("独立","模型a","模型 a","model a"))

@@ -28,3 +28,30 @@ class MatchdeskTests(TestCase):
             for q,field in [("为什么更看好客队","explanation"),("平局概率","draw_explanation"),
                             ("模型 A 与市场","independent_market_explanation"),("模型 B 与市场","market_explanation")]:
                 self.assertIn(game[field],service.ask(q,original["id"])["answer"])
+
+    def test_missing_key_and_missed_freeze_have_independent_explanations(self):
+        fixture = {"id":"game-1","kickoff_utc":"2026-09-10T15:00:00Z","date":"2026-09-10",
+                   "home":"Arsenal","away":"Chelsea","hg":None,"ag":None,"season":"2026-27"}
+        now = datetime(2026,9,12,tzinfo=timezone.utc)
+        # v2 records preserve both reasons. A legacy market-only record can still explain
+        # missing odds; a legacy missed-window record gives no evidence about the odds key.
+        for fields, market in [
+            ({"reason":"missed_window","freeze_reason":"missed_window","market_reason":"missing_api_key"},"missing_api_key"),
+            ({"reason":"missing_api_key"},"missing_api_key"),
+            ({"reason":"missed_window"},"missing_market"),
+        ]:
+            with self.subTest(fields=fields):
+                ledger = {"records":[dict(fields,id=fixture["id"],revision=0,kickoff=fixture["kickoff_utc"])]}
+                with patch.object(service,"model_inputs",return_value={}), patch.object(service,"model_dir"), \
+                        patch.object(service,"_history_for",return_value=({},{})), \
+                        patch.object(service.models,"forecast_many",return_value={}):
+                    game = service._present([fixture],[fixture],ledger,now)[0]
+                service.lifecycle.attach([game],[fixture],[],ledger,{},[],now)
+                self.assertEqual(game["trace"]["freeze_reason"],"missed_window")
+                self.assertEqual(game["trace"]["market_reason"],market)
+                self.assertEqual(game["market_note"],service.REASONS[market])
+                self.assertIn(game["freeze_note"],game["trace_answer"])
+                self.assertIn(game["market_note"],game["trace_answer"])
+                with patch.object(service,"fixtures",return_value=[fixture]), patch.object(service,"prediction",return_value=game):
+                    self.assertIn(game["market_note"],service.ask("为什么没有赔率？",fixture["id"])["answer"])
+                    self.assertIn(game["freeze_note"],service.ask("本场预测？",fixture["id"])["answer"])

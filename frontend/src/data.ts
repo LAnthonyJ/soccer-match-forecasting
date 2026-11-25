@@ -28,7 +28,7 @@ export interface Fixture {
   trace?:FixtureTrace; trace_answer?:string;
   id:string; season:string; date:string; kickoff_utc:string|null; home:string; away:string; home_zh?:string; away_zh?:string;
   round?:string|number|null; hg:number|null; ag:number|null; prediction:Prediction|null;
-  result_source?:string|null; source_conflict?:unknown; market_note?:string; market_reason?:string; evidence?:string|null;
+  result_source?:string|null; source_conflict?:unknown; freeze_note?:string; market_note?:string; market_reason?:string; evidence?:string|null;
   explanation?:string; draw_explanation?:string; market_explanation?:string; independent_market_explanation?:string;
 }
 export interface SeasonScore {season:string; total:number; paired:number; coverage:number; model_loss:number|null; market_loss:number|null}
@@ -151,8 +151,12 @@ export function localAnswer(question:string,selected:Fixture|undefined,data:Dash
   const title=f.date+' '+nameOf(f,'home')+' 对 '+nameOf(f,'away')
   if(tracing) return {answer:f.trace_answer||'本场没有可评分的前瞻冻结记录。'}
   if(/踢谁|对手|何时|时间|赛程|weekend/.test(q)) return {answer:title+'。开球时间（UTC）：'+(f.kickoff_utc||'待核实')+'。'}
-  if(!f.prediction) return {answer:title+' 暂无已核实的赛前预测。'+(f.market_note||'')+'。'}
-  if(/市场|分歧|赔率|market/.test(q)){
+  const marketQuestion=/市场|分歧|赔率|market/.test(q)
+  if(!f.prediction){
+    const note=marketQuestion?f.market_note:f.freeze_note
+    return {answer:title+' 暂无已核实的赛前预测。'+(note?note+'。':'')}
+  }
+  if(marketQuestion){
     if(!f.prediction.market&&f.market_note)return {answer:title+'。'+f.market_note+'。缺少合格的同期市场快照，无法计算市场分歧。'}
     return {answer:title+'。'+(/独立|模型\s*a|model a/.test(q)?f.independent_market_explanation:f.market_explanation)}
   }

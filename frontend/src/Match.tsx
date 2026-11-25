@@ -65,13 +65,14 @@ export function Match({f,openAsk}:{f:Fixture;openAsk:(q:string)=>void}) {
       </dl>{f.explanation&&<p className="muted explanation">{f.explanation}</p>}
       {f.evidence&&<a className="ledger" href={f.evidence} target="_blank" rel="noopener">核对赛前公开见证 ↗</a>}</details>
       <button className="ask-strip" onClick={()=>openAsk('这场比赛模型为什么给出这样的概率？')}>询问这场比赛的预测依据 <span aria-hidden="true">↗</span></button>
-    </>:<section className="panel"><h3>暂无合格预测</h3><p className="muted">{f.market_note||'这场比赛的赛程或赛前资料尚未满足预测条件。'}</p></section>}
+    </>:<section className="panel"><h3>暂无合格预测</h3><p className="muted">{f.freeze_note||'这场比赛的赛程或赛前资料尚未满足预测条件。'}</p>
+      {f.market_note&&f.market_note!==f.freeze_note&&<details className="notice market-missing"><summary>缺少市场报价</summary><p>{f.market_note}</p></details>}</section>}
     {f.trace&&<details className="panel provenance"><summary>比赛时间线 · 赛程版本 {f.trace.revision}</summary>
       <dl>{([['赛程确认',f.trace.schedule_at],['计划截止',f.trace.cutoff],['实际冻结',f.trace.frozen],
         ['公开见证',f.trace.witnessed],['收到确认赛果',f.trace.result_at],['本批次结算截至',f.trace.score_as_of],
         ['首次核实本版记录已上线',f.trace.deployed?.seen_at]] as const).map(([label,value])=>
           <div key={label}><dt>{label}</dt><dd>{value?fmtTime(value):'暂无记录'}</dd></div>)}</dl>
-      {f.trace.freeze_reason&&<p>{reasons[f.trace.freeze_reason]||f.market_note||f.trace.freeze_reason}</p>}
+      {f.trace.freeze_reason&&<p>{f.freeze_note||reasons[f.trace.freeze_reason]||f.trace.freeze_reason}</p>}
       {f.trace.witness_status==='late'&&<p className="notice">见证晚于截止时间，本场未计入前瞻成绩。</p>}
       {f.trace.schedule_history.length>1&&<ul>{f.trace.schedule_history.map(v=><li key={v.revision}>
         版本 {v.revision} · 开球 {fmtTime(v.kickoff)} {v.withdrawn?'已撤回':''} {v.evidence&&<a href={v.evidence}>查看原见证</a>}</li>)}</ul>}
