@@ -10,7 +10,7 @@ from tempfile import NamedTemporaryFile
 import requests
 
 from . import data
-from .evidence import audit_public
+from .evidence import audit_public, store_collector_audit
 from .evaluation import formal_report, public_ledger
 from .market import PROTOCOL, canonical, digest, instant, root_dir
 
@@ -233,9 +233,12 @@ def export_bundle(directory, *, root=None, session=None):
              "overlay":data.openligadb_overlay(db,as_of=stamp),
              "ledger":{k:ledger[k] for k in ("registration","registration_evidence","records","health")},
              "seasons_health":{s:data.season_health(db,s,matches=rows,now=stamp) for s in sorted({r["season"] for r in rows})}}
-    _,scores = _check(batch,expected_issue(),session)
+    verified,scores = _check(batch,expected_issue(),session)
     envelope = {"format":FORMAT,"sha256":digest(batch),"data":batch,"scores":scores}
     _write_atomic(Path(directory)/NAME,(canonical(envelope)+"\n").encode("utf8"))
+    audited = verified["ledger"].get("public_audit")
+    if audited and audited.get("registration_ok"):
+        store_collector_audit(root,ledger,audited,stamp)
     return {"format":FORMAT,"sha256":envelope["sha256"],"as_of":batch["as_of"],"scores":scores}
 
 

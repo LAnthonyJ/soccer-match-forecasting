@@ -3,7 +3,6 @@ from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 import json
-import os
 from pathlib import Path
 import re
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -219,7 +218,14 @@ def export_history_assets(directory, dashboard_dict, *, snapshot=None):
     (directory/"history-rows.json").write_text(json.dumps(historical_rows(snapshot=snapshot),ensure_ascii=False,separators=(",",":")),encoding="utf8")
     # Older history remains addressable without putting every season in the initial download.
     included = set(dashboard_dict["available_seasons"])
-    older = [m for m in data.load_matches() if m["season"] not in included]
+    if snapshot is None:
+        source, ledger = fixtures(), public_ledger()
+    else:
+        observed_seasons = {m["season"] for m in snapshot["fixtures"]}
+        source = [m for m in data.load_matches() if m["season"] not in observed_seasons] + snapshot["fixtures"]
+        ledger = snapshot["ledger"]
+    older = [m for m in source if m["season"] not in included]
+    captures = {(r["id"],r["kickoff"],r["revision"]):r for r in ledger["records"] if r["payload"]}
     replays = _history_for(snapshot)[0]
     season_dir = directory/"seasons"
     season_dir.mkdir(exist_ok=True)
@@ -227,6 +233,12 @@ def export_history_assets(directory, dashboard_dict, *, snapshot=None):
         rows = []
         for m in older:
             if m["season"] == season:
+                record = captures.get((m["id"],m["kickoff_utc"],m.get("schedule_revision",0)))
+                if record and m["kickoff_utc"]:
+                    frozen = record["payload"]
+                    rows.append(item(m,frozen["prediction"],"frozen",frozen["market"],frozen["b"],
+                                     reason=record["reason"] if frozen["market"] is None else None,evidence=record["evidence"]))
+                    continue
                 raw = replays.get(m["id"])
                 rows.append(item(m,raw if raw and m["kickoff_utc"] and models.replay_matches(raw,m) else None,reason="no_historical_market"))
         (season_dir/(season+".json")).write_text(json.dumps(rows,ensure_ascii=False,separators=(",",":")),encoding="utf8")

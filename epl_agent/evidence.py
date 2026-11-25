@@ -152,13 +152,37 @@ def audit_public(ledger, session=None, *, expected_issue=None, as_of=None):
             "verified":len(verified),"forecasts":verified,"errors":errors,"comments_fetched":len(cache)}
 
 
+def store_collector_audit(root, ledger, report, as_of):
+    """Apply the audit only to the collector registration and witness it examined."""
+    registration = ledger.get("registration")
+    witness = ledger.get("registration_evidence")
+    registration_hash = digest(registration)
+    if report.get("registration_ok") and (
+            report.get("registration_hash")!=registration_hash or report.get("registration_evidence")!=witness):
+        return False
+    cutoff = instant(as_of)
+    with database(root) as db:
+        db.execute("BEGIN IMMEDIATE")
+        if digest(read_value(db,"registration"))!=registration_hash or read_value(db,"registration_evidence")!=witness:
+            return False
+        previous = read_value(db,"public_audit") or {}
+        if previous.get("registration_hash")==registration_hash and previous.get("registration_evidence")==witness:
+            # v0.1 audit entries only recorded their completion time.
+            previous_cutoff = previous.get("as_of") or previous.get("checked_at")
+            if previous_cutoff and instant(previous_cutoff)>=cutoff:
+                return False
+        write_value(db,"public_audit",dict(report,as_of=cutoff.isoformat(),registration_hash=registration_hash,
+                                          registration_evidence=witness))
+    return True
+
+
 def audit_and_store(root=None, session=None):
     from .evaluation import public_ledger
     from .snapshot import expected_issue
-    report = audit_public(public_ledger(root),session=session,expected_issue=expected_issue(),
-                          as_of=datetime.now(timezone.utc))
-    with database(root) as db:
-        write_value(db,"public_audit",report)
+    ledger = public_ledger(root)
+    cutoff = datetime.now(timezone.utc)
+    report = audit_public(ledger,session=session,expected_issue=expected_issue(),as_of=cutoff)
+    store_collector_audit(root,ledger,report,cutoff)
     return report
 
 

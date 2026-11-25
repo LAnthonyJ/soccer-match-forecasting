@@ -8,9 +8,9 @@ import unittest
 from unittest.mock import Mock, patch
 
 from epl_agent import data, snapshot
-from epl_agent.evaluation import formal_report
-from epl_agent.evidence import _summary
-from epl_agent.market import canonical, digest, PROTOCOL
+from epl_agent.evaluation import formal_report, public_ledger
+from epl_agent.evidence import _summary, store_collector_audit
+from epl_agent.market import canonical, database, digest, PROTOCOL, write_value
 
 
 class SnapshotTests(unittest.TestCase):
@@ -115,6 +115,37 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(scores["pilot"]["n_pairs"],0)
         self.assertEqual(formal_report(rows,ledger,as_of)["verification"]["pending_pairs"],1)
         self.assertEqual(trusted["ledger"]["public_audit"]["verified"],1)
+        with database() as db:
+            write_value(db,"registration",registration)
+            write_value(db,"registration_evidence",ledger["registration_evidence"])
+            db.execute("""INSERT INTO captures (fixture,kickoff,revision,received,reason,hash,payload,evidence,witnessed)
+                          VALUES(?,?,?,?,?,?,?,?,?)""",
+                       (f["id"],entry["kickoff"],0,at,"paired",entry["hash"],canonical(p),entry["evidence"],at))
+        with patch.dict(os.environ,{"EPL_EVIDENCE_REPO":"example/epl","EPL_EVIDENCE_ISSUE":"1"}):
+            exported=snapshot.export_bundle(self.dir/"audited",session=http)
+            local_ledger=public_ledger()
+            local=formal_report(rows,local_ledger,datetime.fromisoformat(exported["as_of"]))
+            self.assertEqual(local["n_pairs"],1)
+            self.assertEqual(local["scores"],exported["scores"]["formal"]["scores"])
+            self.assertEqual(local_ledger["public_audit"]["as_of"],exported["as_of"])
+            # An independent verifier may use a fresh home and must leave it untouched.
+            clean_home=self.dir/"reader"
+            with patch.dict(os.environ,{"EPL_AGENT_HOME":str(clean_home)}):
+                snapshot.verify(self.dir/"audited",session=http)
+                self.assertFalse(clean_home.exists())
+        # A slower audit must not roll a newer batch back, nor attach it to another issue or model.
+        stale=deepcopy(trusted["ledger"]["public_audit"])
+        stale["forecasts"].clear()
+        self.assertFalse(store_collector_audit(None,ledger,stale,as_of))
+        self.assertEqual(public_ledger()["public_audit"],local_ledger["public_audit"])
+        for key in ("registration","registration_evidence"):
+            foreign=deepcopy(ledger)
+            foreign[key]=None
+            self.assertFalse(store_collector_audit(None,foreign,stale,datetime.now(timezone.utc)))
+        with database() as db:
+            write_value(db,"registration_evidence",dict(url=issue+"#issuecomment-99",at=at))
+        self.assertFalse(store_collector_audit(None,ledger,stale,datetime.now(timezone.utc)))
+        self.assertEqual(public_ledger()["public_audit"],local_ledger["public_audit"])
         # The same type of witnessed receipt in the registration season is pilot-only.
         pilot = deepcopy(trusted["ledger"])
         pilot_reg = dict(registration,created=f["date"][:4]+"-07-01T00:00:00Z",seasons=["2025-26","2026-27"])
