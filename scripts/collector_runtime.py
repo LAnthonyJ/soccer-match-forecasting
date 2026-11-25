@@ -124,11 +124,16 @@ def run_worker(home):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("backup","check","run"))
+    parser.add_argument("action", choices=("backup","check","run","stop"))
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--backup-base", type=Path)
     parser.add_argument("--git-credential", action="store_true")
     args = parser.parse_args()
+    if args.action == "stop":
+        from epl_agent.worker import request_stop
+        request_stop(args.root)
+        print(json.dumps({"stopped": True, "lock_released": True}))
+        return 0
     if args.action=="backup":
         print(json.dumps(backup(args.root,args.backup_base or args.root/"collector-backups"), ensure_ascii=True))
         return 0

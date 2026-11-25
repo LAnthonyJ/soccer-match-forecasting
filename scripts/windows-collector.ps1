@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory,Position=0)]
-    [ValidateSet('Install','Uninstall','Status','Start','Check','Backup','Configure','Run','RunProbe','Probe')]
+    [ValidateSet('Install','Uninstall','Status','Start','Stop','Check','Backup','Configure','Run','RunProbe','Probe')]
     [string]$Action,
     [string]$Python,
     [string]$DataRoot = (Join-Path ([Environment]::GetFolderPath('UserProfile')) '.epl-prediction-agent'),
@@ -126,11 +126,6 @@ if ($Action -eq 'Status') {
         scheduler_probe=if(Test-Path -LiteralPath $proofFile){Get-Content -Raw -LiteralPath $proofFile | ConvertFrom-Json}else{$null}}
     return
 }
-if ($Action -eq 'Uninstall') {
-    if (Find-OwnedTask $TaskName) { Unregister-ScheduledTask -TaskPath '\' -TaskName $TaskName -Confirm:$false }
-    if (Find-OwnedShortcut) { Remove-Item -LiteralPath $shortcutPath }
-    return
-}
 if ($Action -eq 'Start') {
     $installed = Find-OwnedTask $TaskName
     if (-not $installed -and -not (Find-OwnedShortcut)) { throw 'Install the collector task first.' }
@@ -151,12 +146,35 @@ if ($Action -in @('Install','Probe')) {
 if ($Action -in @('Run','RunProbe') -or ((Test-Path -LiteralPath $configFile) -and -not $Python -and -not $Repository)) {
     $readConfig = if ($Action -eq 'RunProbe') { $probeConfig } else { $configFile }
     $conf = Get-Content -LiteralPath $readConfig -Raw | ConvertFrom-Json
-    $Python=$conf.python; $DataRoot=$conf.data_root; $Repository=$conf.repo; $Issue=$conf.issue
+    $Python=$conf.python; $Repository=$conf.repo; $Issue=$conf.issue
+    if ($Action -in @('Run','RunProbe') -or -not $PSBoundParameters.ContainsKey('DataRoot')) { $DataRoot=$conf.data_root }
     $PagesCodeBranch=$conf.pages_branch; $UseGitCredential=[bool]$conf.git_credential
 }
 if (-not $Python) { $Python = (Get-Command python.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source }
 $Python = (Resolve-Path -LiteralPath $Python).Path
 $DataRoot = [IO.Path]::GetFullPath($DataRoot)
+if ($Action -in @('Stop','Uninstall')) {
+    $installed = Find-OwnedTask $TaskName
+    $shortcut = Find-OwnedShortcut
+    if (($installed -or $shortcut) -and (Test-Path -LiteralPath $configFile)) {
+        $ownedRoot = (Get-Content -Raw -LiteralPath $configFile | ConvertFrom-Json).data_root
+        if ([IO.Path]::GetFullPath($ownedRoot) -ne $DataRoot) { throw 'DataRoot differs from the registered collector.' }
+    }
+    & $Python $runtime stop --root $DataRoot
+    if ($LASTEXITCODE) { throw 'Could not verify release of the collector data directory.' }
+    if ($installed -and $installed.State -eq 'Running') {
+        $until = [DateTime]::UtcNow.AddSeconds(15)
+        while ((Find-OwnedTask $TaskName).State -eq 'Running' -and [DateTime]::UtcNow -lt $until) {
+            Start-Sleep -Milliseconds 300
+        }
+        if ((Find-OwnedTask $TaskName).State -eq 'Running') { throw 'The scheduled launcher is still running.' }
+    }
+    if ($Action -eq 'Uninstall') {
+        if ($installed) { Unregister-ScheduledTask -TaskPath '\' -TaskName $TaskName -Confirm:$false }
+        if ($shortcut) { Remove-Item -LiteralPath $shortcutPath }
+    }
+    return
+}
 if ($Action -eq 'Backup') {
     $arguments = @($runtime,'backup','--root',$DataRoot)
     if ($BackupBase) { $arguments += @('--backup-base',$BackupBase) }

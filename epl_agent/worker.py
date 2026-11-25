@@ -6,13 +6,18 @@ import json
 import os
 from pathlib import Path
 import time
+from uuid import UUID, uuid4
 
 from . import data, evidence, operations, snapshot, source_sync
 from .market import database, instant, read_value, root_dir
 
 
+class WorkerRunning(ValueError):
+    pass
+
+
 @contextmanager
-def single_worker(root):
+def _worker_lock(root):
     root.mkdir(exist_ok=True, parents=True)
     with (root/"worker.lock").open("a+b") as lock:
         if not lock.tell():
@@ -27,8 +32,59 @@ def single_worker(root):
                 import fcntl
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as exc:
-            raise ValueError("An EPL collector already holds this data directory") from exc
+            raise WorkerRunning("An EPL collector already holds this data directory") from exc
         yield
+
+
+@contextmanager
+def single_worker(root):
+    with _worker_lock(root):
+        instance = uuid4().hex
+        current = root / "worker.instance"
+        previous = current.read_text("ascii") if current.is_file() else ""
+        if len(previous) == 32 and all(c in "0123456789abcdef" for c in previous):
+            (root / ("worker.stop-" + previous)).unlink(missing_ok=True)
+        pending = root / ("worker.stop-" + instance)
+        temp = root / "worker.instance.tmp"
+        temp.write_text(instance, encoding="ascii")
+        temp.replace(current)
+        try:
+            yield pending.exists
+        finally:
+            current.unlink(missing_ok=True)
+            pending.unlink(missing_ok=True)
+
+
+def request_stop(root, timeout=120):
+    """Stop only the current holder of this data directory and verify lock release."""
+    if not (root / "worker.lock").exists():
+        return
+    deadline = time.monotonic() + timeout
+    identity_deadline = time.monotonic() + 2
+    requested = None
+    while True:
+        try:
+            with _worker_lock(root):
+                return
+        except WorkerRunning:
+            pass
+        try:
+            instance = (root / "worker.instance").read_text("ascii")
+        except FileNotFoundError:
+            instance = None
+        if instance:
+            if UUID(instance).hex != instance:
+                raise ValueError("Invalid collector instance identity")
+            if requested and requested != instance:
+                raise ValueError("Another collector started during maintenance")
+            if not requested:
+                requested = instance
+                (root / ("worker.stop-" + instance)).touch()
+        elif not requested and time.monotonic() >= identity_deadline:
+            raise ValueError("The data directory is locked by a collector without the stop protocol")
+        if time.monotonic() >= deadline:
+            raise ValueError("The collector has not yet released its data directory")
+        time.sleep(0.2)
 
 
 def synchronize(provider,root):
@@ -99,8 +155,10 @@ def run(*, publish=False, publish_snapshot_enabled=False, once=False):
     due = {key:0 for key in jobs}
     pending, errors, failures, attempted = {}, {}, {}, set()
     heartbeat_due = 0
-    with single_worker(root), ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+    with single_worker(root) as stop_requested, ThreadPoolExecutor(max_workers=len(jobs)) as pool:
         while True:
+            if stop_requested():
+                return {"ok":True,"stopped":True,"errors":dict(errors)}
             now = time.monotonic()
             if now >= heartbeat_due:
                 operations.set_values(root, heartbeat_at=operations.stamp())

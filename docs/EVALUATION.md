@@ -93,6 +93,8 @@ $settings = @{Python=(Get-Command python.exe).Source; Repository='LAnthonyJ/worl
 & $collector Status
 ```
 
+后续升级时执行 `& $collector Stop`。这会向持有指定数据目录锁的实例发出停机请求，等待当前工作完成，并实际重新取得锁验证停机。任务外壳提前退出时，仍可通过数据目录联系子进程。看到 `lock_released: true` 后，依次备份、更新程序并启动。老版本若报告不支持停机协议，请维护者核对原任务账户、解释器、项目运行脚本、数据目录及父子进程后停止该实例，再重新核实锁已释放。
+
 如果 Windows 权限阻止创建开机任务，可显式运行 `& $collector Install @settings -AtLogon` 创建当前账户的登录启动项。该模式从用户登录时开始采集，`Status` 中的 `logon_fallback` 会显示启用状态。登录前错过的窗口由 worker 记录。
 
 `Configure` 在本机隐藏输入并绑定当前 Windows 身份保存凭据。见证凭据需目标仓库 Issues 写权限；数据发布凭据需目标仓库 Contents 写权限。已有可用于该仓库的 Git Credential Manager 登录时可选用 `-UseGitCredential`。启用市场时再配置 `ODDS_API_KEY`。若免密码的计划任务身份无法访问凭据，可在本机以 `-Credential (Get-Credential)` 对同一账户依次执行 `Probe`、`Install`。`Install` 只注册任务，`Start` 在接管时启动，`Uninstall` 移除本项目任务。更新与备份操作使用相同的 `-DataRoot`；默认位置为用户目录下的 `.epl-prediction-agent`。
@@ -104,6 +106,8 @@ $settings = @{Python=(Get-Command python.exe).Source; Repository='LAnthonyJ/worl
 **回滚。** 部署或核验失败时继续提供上一份审计成功的站点。先停止升级后的 worker，备份故障现场、完整冻结数据库、待见证和已有回执。若新版已产生新见证，保留最新数据和能够读 v2 的版本，修复后从同一目录恢复；覆盖为旧备份会丢失已公告哈希。仅在确认没有升级后的新增观察及见证时，才在独立目录恢复升级前备份、重装已知可用的软件并重新核验公开账本。对齐线上 SHA、任务账户和本地样本后再启动唯一的采集任务。
 
 ## Windows operator quick start
+
+For upgrades, use `& $collector Stop`. The request identifies the running instance by its data directory and waits for active work and release of its exclusive lock. This also reaches a collector whose scheduler launcher has already exited. After `lock_released: true`, back up the databases, update the package, and start the task. For a legacy collector that reports an unsupported stop protocol, identify its account, interpreter, project script, data directory and child processes before stopping the exact instance and verifying the lock again.
 
 If Windows denies boot-task registration, `& $collector Install @settings -AtLogon` explicitly installs a current-user sign-in shortcut. Collection starts after sign-in. Check the `logon_fallback` field in `Status` to identify this mode.
 
