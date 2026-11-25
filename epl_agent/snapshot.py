@@ -271,7 +271,10 @@ def _check(batch, issue, session=None, *, version=FORMAT):
     report = formal_report(batch["fixtures"],ledger,as_of,include_independent=version!=LEGACY_FORMAT)
     # Audit execution time can differ on a second machine. Scores use the batch's fixed cutoff.
     def scores(cohort):
-        summary = {k:cohort[k] for k in ("n_pairs","seasons","scores","delta","ci","missing")}
+        summary = {k:cohort[k] for k in ("n_pairs","scores","delta","ci","missing")}
+        # Keep presentation notes outside the versioned, independently recomputable score envelope.
+        fields = ("season","total","finished","paired","coverage","model_loss","market_loss")
+        summary["seasons"] = [{key:row[key] for key in fields} for row in cohort["seasons"]]
         if version != LEGACY_FORMAT:
             summary["independent"] = cohort["independent"]
         return summary

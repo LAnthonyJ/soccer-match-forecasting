@@ -177,6 +177,9 @@ class SnapshotTests(unittest.TestCase):
         current,current_scores = snapshot._check(early_batch,issue,early_http)
         self.assertEqual(legacy_scores["formal"]["n_pairs"],1)
         self.assertEqual(current_scores["formal"]["n_pairs"],0)
+        for scores in (legacy_scores,current_scores):
+            self.assertEqual(set(scores["formal"]["seasons"][0]), {
+                "season","total","finished","paired","coverage","model_loss","market_loss"})
         self.assertEqual(current_scores["formal"]["independent"]["n_scored"],0)
         self.assertEqual(current["ledger"]["records"][0]["hash"],legacy["ledger"]["records"][0]["hash"])
         self.assertNotIn("legacy_pair_window",early_batch["ledger"])
