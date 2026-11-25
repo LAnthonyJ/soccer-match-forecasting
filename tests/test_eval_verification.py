@@ -95,7 +95,7 @@ class VerificationTests(unittest.TestCase):
                     ledger["records"].append(r)
         self.assertEqual(formal_report(fixtures,ledger,self.now)["status"],"unproven")
         # Cached outcome of an independent audit; network evidence verified separately above.
-        ledger["public_audit"] = {"registration_ok":True,"registration_hash":digest(self.reg),
+        ledger["public_audit"] = {"ok":True,"registration_ok":True,"registration_hash":digest(self.reg),
             "registration_evidence":ledger["registration_evidence"],
             "forecasts":{r["hash"]:{"url":r["evidence"],"at":r["witnessed"]} for r in ledger["records"]}}
         report = formal_report(fixtures,ledger,self.now)

@@ -1,34 +1,53 @@
 export type Triple = [number, number, number]
+export type Outcome = 'H'|'D'|'A'
+export type Component = 'elo'|'dc'|'tree'|'a'
+export type Probabilities = Record<Component,Triple|null>
+export interface HistoryRow {
+  id:string; date:string; season:string; home:string; away:string; actual:Outcome; cutoff:string; model_version:string; probs:Probabilities
+}
+export interface MarketRow {
+  id:string; season:string; home?:string; away?:string; kickoff?:string|null; cutoff?:string|null;
+  status?:string; reason?:string|null; actual?:string|number|null; a?:Triple|null; market?:Triple|null; b?:Triple|null; evidence?:string|null
+}
 export interface Prediction {
-  a: Triple; b: Triple | null; market: Triple | null; xg: [number, number];
-  top_scores: [number, number, number][]; cutoff: string; model_version: string;
-  samples: [number, number]; form?: Record<'home'|'away',{gf:number;ga:number;points:number}>; source: 'replay' | 'frozen' | 'preview';
+  a:Triple; b:Triple|null; market:Triple|null; xg:[number,number]; top_scores:[number,number,number][];
+  cutoff:string; model_version:string; samples:[number,number];
+  form?:Record<'home'|'away',{gf:number;ga:number;points:number}>; source:'replay'|'frozen'|'preview'|'reconstruction';
 }
 export interface Fixture {
-  id: string; season: string; date: string; kickoff_utc: string | null;
-  home: string; away: string; home_zh?: string; away_zh?: string;
-  round?: string | number | null; hg: number | null; ag: number | null; prediction: Prediction | null;
+  id:string; season:string; date:string; kickoff_utc:string|null; home:string; away:string; home_zh?:string; away_zh?:string;
+  round?:string|number|null; hg:number|null; ag:number|null; prediction:Prediction|null;
+  result_source?:string|null; source_conflict?:unknown; market_note?:string; market_reason?:string; evidence?:string|null;
+  explanation?:string; draw_explanation?:string; market_explanation?:string; independent_market_explanation?:string;
 }
+export interface SeasonScore {season:string; total:number; paired:number; coverage:number; model_loss:number|null; market_loss:number|null}
 export interface Report {
-  status: 'accumulating' | 'unproven' | 'leading'; n_pairs: number;
-  seasons: { season: string; total: number; paired: number; coverage: number; model_loss: number|null; market_loss: number|null }[];
-  delta: number|null; ci: [number,number]|null; missing: Record<string,number>;
-  history: { n:number; seasons: {season:string; n:number; log_loss:number; brier:number; accuracy:number; elo_loss:number}[];
-    calibration: {p:number; observed:number; n:number}[];
-    worst: {id:string; home:string; away:string; season:string; prob:number; actual:string|number}[] };
+  status:'accumulating'|'unproven'|'leading'; n_pairs:number; seasons:SeasonScore[];
+  delta:number|null; ci:[number,number]|null; missing:Record<string,number>;
+  pilot?:{n_pairs:number; rows?:MarketRow[]; seasons:SeasonScore[]}; rows?:MarketRow[];
+  verification?:{pending_pairs?:number;audited_at?:string|null};
+  history:{n:number; seasons:{season:string; n:number; log_loss:number; brier:number; accuracy:number; elo_loss:number}[];
+    calibration:{p:number; observed:number; n:number}[]; worst:{id:string;home:string;away:string;season:string;prob:number;actual:string|number}[]};
+}
+export interface Health {
+  season:string; last_scored_date:string|null; last_sync_at:string|null; overdue_count:number; overdue_ids:string[]; conflict_ids:string[]; conflict_count:number;
+  sources?:{provider:string;last_success_at:string|null;status:string}[];
 }
 export interface Dashboard {
-  fixtures: Fixture[]; default_id:string; updated_at:string; source_updated_at?:string; data_version?:string; available_seasons?:string[]; report:Report;
+  fixtures:Fixture[]; default_id:string; current_id?:string; updated_at:string; data_version?:string; available_seasons?:string[];
+  health?:Health; public_snapshot?:boolean; archive_seasons?:string[]; last_scored_date?:string|null; last_complete_season?:string|null; team_aliases?:Record<string,string[]>; report:Report
 }
 export type Choice = {id:string; label:string}
 export type Answer = {answer:string;choices?:Choice[]}
 export const pct = (value: number | null | undefined) => value == null || !Number.isFinite(value) ? '—' : (value*100).toFixed(1)+'%'
 export const num = (n: number|null|undefined, d=3) => n == null || !Number.isFinite(n) ? '—' : n.toFixed(d)
 export const sides = ['主胜','平局','客胜']
-export const labels = {replay:'历史回放',frozen:'赛前已冻结',preview:'预测预览'}
+export const labels = {replay:'历史回放',frozen:'赛前已冻结',preview:'预测预览',reconstruction:'按历史时点重建'}
 export const statusLabels = {accumulating:'积累样本中',unproven:'尚未证实领先',leading:'在所列赛季和时点领先'}
 export const nameOf = (f: Fixture, s: 'home' | 'away') => f[s+'_zh' as 'home_zh'|'away_zh'] || f[s]
 export function fixtureStatus(f: Fixture) {
+  if(!f.kickoff_utc) return '开球待核实'
+  if(f.source_conflict) return '比分待核实'
   if(f.prediction) return labels[f.prediction.source]
   if(f.hg!=null && f.ag!=null) return '已收录赛果'
   const expectedEnd=Date.parse(f.kickoff_utc||f.date+'T23:59:59Z')+3*3600000
@@ -68,43 +87,52 @@ export function difference(p:Prediction) {
   const i = gaps.reduce((a,b,i)=>Math.abs(b)>Math.abs(gaps[a])?i:a,0)
   return {side:sides[i],gap:gaps[i],model:p.b?'融合模型 B':'独立模型 A'}
 }
-export function localAnswer(question:string,selected: Fixture|undefined, data:Dashboard):Answer {
-  const q = question.trim().toLowerCase()
-  if (/伤|停赛|首发|阵容/.test(q)) return {answer:'缺少可核实的实时伤停和首发数据。当前模型使用已结束比赛的结果和赛程信息。'}
-  if (/成绩|过去一季|战绩|领先市场|击败市场/.test(q)) {
-    const r = data.report
-    const last = [...r.seasons].sort((a,b)=>b.season.localeCompare(a.season))[0]
-    return {answer:'正式评测状态为「'+statusLabels[r.status]+'」，累计 '+r.n_pairs+' 场有效配对。'+(last?'最近评测赛季 '+last.season+'，覆盖率 '+pct(last.coverage)+'。':'尚无已评分的前瞻赛季。') }
-  }
-  const clubs=new Set<string>()
-  for (const row of data.fixtures) for (const side of ['home','away'] as const) {
-    if ([row[side],nameOf(row,side)].some(n=>n && q.includes(n.toLowerCase()))) clubs.add(row[side])
-  }
-  let f=selected
-  if (clubs.size || /周末|下一场|下场/.test(q)) {
-    let games=data.fixtures.filter(m=>[...clubs].every(t=>m.home===t||m.away===t))
-    if (/周末|下场|下一场/.test(q)) {
-      const now=new Date(), start=new Date(now)
-      start.setHours(0,0,0,0)
-      const sat=new Date(start)
-      sat.setDate(start.getDate()+((6-start.getDay()+7)%7)-(start.getDay()===0?7:0))
-      const end=new Date(sat); end.setDate(sat.getDate()+2)
-      games=games.filter(m=>{const d=new Date(m.kickoff_utc || m.date+'T12:00:00');return /周末/.test(q)?d>=sat&&d<end:d>=now})
+export async function fetchSeasonFixtures(season:string, signal:AbortSignal):Promise<Fixture[]> {
+  if (!isStatic()) return (await fetchDash(season,signal)).fixtures
+  const res=await fetch('./seasons/'+encodeURIComponent(season)+'.json',{signal})
+  if(!res.ok) throw new Error('该赛季暂不可用')
+  return res.json()
+}
+export const reasons:Record<string,string> = {
+  missed_window:'错过采集窗口', no_matching_snapshot:'缺少对应版本快照', rescheduled:'赛程变更', pending_audit:'等待公开核验',
+  insufficient_books:'合格书商不足', source_conflict:'比分冲突', unverified_forecast:'见证未通过', missing_market:'缺少同期市场',
+  schedule_unverified:'赛程未核实', no_api_key:'采集机未配置赔率密钥', paired:'已配对', awaiting_result:'等待赛果',
+  no_historical_market:'无同期市场', pending:'等待核验', duplicate_capture:'重复采集', no_snapshot:'缺少快照',
+}
+export function localAnswer(question:string,selected:Fixture|undefined,data:Dashboard):Answer {
+  const q=question.trim().toLowerCase()
+  if (/伤|停赛|首发|阵容|injur|lineup/.test(q)) return {answer:'目前缺少可核实的实时伤停和首发数据。模型使用赛前已知的历史赛果。'}
+  if (/过去|成绩|表现比|领先市场|赛季模型|战绩|beat the market|上赛季/.test(q)) {
+    const r=data.report
+    const season=q.match(/20\d\d-\d\d/)?.[0] || (/过去一季|上赛季/.test(q)?data.last_complete_season:null)
+    if(season){
+      const s=r.seasons.find(x=>x.season===season)
+      if(!s?.paired) return {answer:season+' 赛季尚无可核验的同场市场配对，无法判断该季是否领先。'}
+      return {answer:season+' 赛季有 '+s.paired+' 场有效配对，融合模型和市场平均对数损失分别为 '+num(s.model_loss,4)+'、'+num(s.market_loss,4)+'。'}
     }
-    games.sort((a,b)=>a.date.localeCompare(b.date))
-    if (!games.length) return {answer:'该时间范围的演示赛程中没有匹配的比赛。请在比赛看板选择已收录的场次。'}
-    if(games.length>1 && !/下场|下一场/.test(q)) return {answer:'找到多个匹配场次，请选择一场。',choices:games.slice(-8).reverse().map(m=>({id:m.id,label:m.date+' · '+nameOf(m,'home')+' vs '+nameOf(m,'away')}))}
-    f=games[0]
+    return {answer:'正式评测有 '+r.n_pairs+' 场可核验配对，目前'+statusLabels[r.status]+'。'}
   }
-  if(!f) return {answer:'请先选择要查看的比赛。'}
-  const title=nameOf(f,'home')+' vs '+nameOf(f,'away')+'（'+f.date+'）'
-  if (/周末|对手|下一场|下场|踢谁/.test(q)) return {answer:title+'，开球时间 '+fmtTime(f.kickoff_utc)+'。'}
-  const p=f.prediction
-  if(!p) return {answer:title+' 还没有合格的赛前预测。'}
-  if(/市场|赔率|分歧/.test(q)) {
-    const d=difference(p)
-    return {answer:title+'。'+(d?d.model+'与市场在'+d.side+'上的分歧最大，概率相差 '+(100*Math.abs(d.gap)).toFixed(1)+' 个百分点。':'此快照缺少合格的 T−24h 市场数据，暂时无法比较。')}
+  const teams=new Set<string>()
+  for(const [team,aliases] of Object.entries(data.team_aliases||{})) {
+    if([team,...aliases].some(alias=>q.includes(alias.toLowerCase())))teams.add(team)
   }
-  if (!/概率|看好|赢|预测|平局|主胜|客胜|为什么/.test(q)) return {answer:'可以询问赛程、胜平负概率、市场分歧或模型成绩。'}
-  return {answer:title+'。独立模型 A 的主胜、平局、客胜概率分别为 '+p.a.map(pct).join('、')+'。主客队预期进球为 '+num(p.xg[0],2)+' 和 '+num(p.xg[1],2)+'。数据截止 '+fmtTime(p.cutoff)+'。'}
+  const weekend=/周末|weekend/.test(q), next=/下一场|下场/.test(q)
+  let games=data.fixtures.filter(m=>[...teams].every(t=>t===m.home||t===m.away))
+  if(weekend||next){
+    const today=new Date();today.setHours(0,0,0,0)
+    const sat=new Date(today);sat.setDate(today.getDate()+(today.getDay()===0?-1:(6-today.getDay()+7)%7))
+    const end=new Date(sat);end.setDate(sat.getDate()+2)
+    games=games.filter(m=>{const d=new Date(m.kickoff_utc||m.date+'T12:00:00');return m.hg===null&&(weekend?d>=sat&&d<end:d>=today)})
+  }
+  const f=games.find(m=>m.id===selected?.id) || (games.length===1 || next?games[0]:undefined)
+  if(!f){
+    const now=Date.now()
+    games.sort((a,b)=>Math.abs(Date.parse(a.date)-now)-Math.abs(Date.parse(b.date)-now))
+    return {answer:games.length?'请选择具体场次。':'已收录的赛程中没有找到符合条件的比赛。',choices:games.slice(0,8).map(m=>({id:m.id,label:m.date+' · '+m.home+' – '+m.away}))}
+  }
+  const title=f.date+' '+nameOf(f,'home')+' 对 '+nameOf(f,'away')
+  if(/踢谁|对手|何时|时间|赛程|weekend/.test(q)) return {answer:title+'。开球时间（UTC）：'+(f.kickoff_utc||'待核实')+'。'}
+  if(!f.prediction) return {answer:title+' 暂无已核实的赛前预测。'+(f.market_note||'')+'。'}
+  if(/市场|分歧|赔率|market/.test(q)) return {answer:title+'。'+(/独立|模型\s*a|model a/.test(q)?f.independent_market_explanation:f.market_explanation)}
+  return {answer:title+'。'+(q.includes('平局')?f.draw_explanation:f.explanation)}
 }

@@ -62,7 +62,13 @@ def fixture_digest(match):
     return _digest([match.get(k) for k in ("id", "season", "date", "kickoff_utc", "home", "away", "hg", "ag")])
 
 
+def _schedule_digest(match):
+    return _digest([match.get(k) for k in ("id", "season", "date", "kickoff_utc", "home", "away")])
+
+
 def replay_matches(replay, match):
+    if replay and "schedule_digest" in replay:
+        return replay["schedule_digest"] == _schedule_digest(match)
     return bool(replay and replay.get("source_fixture_digest") == fixture_digest(match))
 
 
@@ -118,34 +124,112 @@ class _History:
                 (day - date(season, 8, 1)).days / 365, home.games, away.games]
 
 
-def _timeline(matches):
-    usable = [m for m in matches if m.get("date") and m.get("home") and m.get("away")]
-    finished = sorted(((_available(m), m) for m in usable if m.get("hg") is not None and m.get("ag") is not None),
-                      key=lambda pair: (pair[0], _kickoff(pair[1]), pair[1]["id"]))
-    features = {}
-    state = _History()
-    position = 0
-    last_event = None
-    for match in sorted(usable, key=lambda m: (_kickoff(m), m["id"])):
-        cutoff = _kickoff(match) - timedelta(days=1)
-        rebuild = False
-        while position < len(finished) and finished[position][0] <= cutoff:
-            visible = finished[position][1]
-            event = (_kickoff(visible), visible["id"])
-            if last_event and event < last_event:
-                rebuild = True
-            last_event = max(last_event, event) if last_event else event
-            if not rebuild:
-                state.record(visible)
-            position += 1
-        # A delayed observation can alter earlier scores, but never later forecasts
-        # in the opposite time direction. Replay available games in playing order.
-        if rebuild:
-            state = _History()
-            for _, visible in sorted(finished[:position], key=lambda row: (_kickoff(row[1]),row[1]["id"])):
-                state.record(visible)
-        features[match["id"]] = state.features(match)
+def _scored(row):
+    return (row is not None and not row.get("source_conflict")
+            and row.get("hg") is not None and row.get("ag") is not None)
+
+
+def _playing_order(row):
+    return _kickoff(row), row["id"]
+
+
+class _Versions:
+    """Pinned reconstruction plus immutable local observations. All selection is as-of."""
+
+    def __init__(self, matches, versions=(), archive=None):
+        self.history = defaultdict(list)
+        for row in versions:
+            self.history[row["id"]].append((_instant(row["observed_at"]), row))
+        self.base = {m["id"]: m for m in (matches if archive is None else archive)
+                     if not m.get("withdrawn") and (archive is not None or m["id"] not in self.history)}
+        self.ids = sorted(self.base.keys() | self.history.keys())
+        self.times = {}
+        events = set()
+        for key, entries in self.history.items():
+            entries.sort(key=lambda entry: entry[0])
+            self.times[key] = [t for t, _ in entries]
+            for t, row in entries:
+                events.add((t, key))
+                if _scored(row):
+                    events.add((max(t, _available(row)), key))
+        for key, row in self.base.items():
+            if _scored(row):
+                events.add((_available(row), key))
+        def event_order(event):
+            at, key = event
+            current = self.at(key, at)
+            return at, _kickoff(current) if current else at, key
+        self.events = sorted(events,key=event_order)
+
+    def at(self, key, cutoff):
+        i = bisect_right(self.times.get(key, ()), cutoff)
+        row = self.history[key][i-1][1] if i else self.base.get(key)
+        return row if row and not row.get("withdrawn") else None
+
+    def fixtures(self, cutoff):
+        return [row for key in self.ids if (row := self.at(key, cutoff)) is not None]
+
+    def score(self, key, cutoff):
+        row = self.at(key, cutoff)
+        return row if _scored(row) and _available(row) <= cutoff else None
+
+    def finished(self, cutoff):
+        pairs = [(_available(m), m) for key in self.ids if (m := self.score(key, cutoff)) is not None]
+        return sorted(pairs, key=lambda pair: (pair[0], *_playing_order(pair[1])))
+
+    def features(self, targets, *, schedule_keys=False):
+        # Append new scores in playing order. Rebuild after a late observation, correction or withdrawal.
+        state = _History()
+        known = {}
+        position = 0
+        last = None
+        result = {}
+        for cutoff, target in sorted(targets, key=lambda pair: (pair[0], pair[1]["id"])):
+            rebuild = False
+            while position < len(self.events) and self.events[position][0] <= cutoff:
+                at, key = self.events[position]
+                position += 1
+                new = self.score(key, at)
+                previous = known.get(key)
+                if previous and new and fixture_digest(previous) == fixture_digest(new):
+                    continue
+                if previous is not None:
+                    del known[key]
+                    rebuild = True
+                if new is not None:
+                    known[key] = new
+                    order = _playing_order(new)
+                    if last is not None and order < last:
+                        rebuild = True
+                    if not rebuild:
+                        state.record(new)
+                    last = max(order, last) if last else order
+            if rebuild:
+                state = _History()
+                for row in sorted(known.values(), key=_playing_order):
+                    state.record(row)
+                last = max(map(_playing_order, known.values()), default=None)
+            current = self.at(target["id"], cutoff)
+            if current is not None and _schedule_digest(current) == _schedule_digest(target):
+                key = _schedule_digest(target) if schedule_keys else target["id"]
+                result[key] = state.features(current)
+        return result
+
+
+_LATEST = datetime.max.replace(tzinfo=UTC)
+
+
+def _evaluation_view(source, as_of):
+    end = _instant(as_of) if as_of is not None else _LATEST
+    finished = source.finished(end)
+    features = source.features([(_kickoff(m)-timedelta(days=1), m) for _, m in finished])
     return finished, features
+
+
+def _timeline(matches):
+    source = _Versions(matches)
+    features = source.features([(_kickoff(m)-timedelta(days=1), m) for m in matches])
+    return source.finished(_LATEST), features
 
 
 def _dc_fit(matches, cutoff):
@@ -280,12 +364,15 @@ def _predict(match, x, artifact, cutoff, *, historical):
     draw = .27 * (1 - abs(2*win-1))
     return {
         "probs": probs.tolist(), "elo_probs": [(1-draw)*win, draw, (1-draw)*(1-win)],
+        "dc_probs": dc.tolist(), "tree_probs": boosted.tolist() if artifact["booster"] else None,
         "xg": [float((recalibrated*h).sum()), float((recalibrated*a).sum())],
         "top_scores": [{"home": int(idx//grid.shape[1]), "away": int(idx%grid.shape[1]),
                         "prob": float(recalibrated.flat[idx])} for idx in largest],
         "samples": {"home": int(x[12]), "away": int(x[13])},
         "form": {"home": {"gf": x[1], "ga": x[2], "points": x[3]},
                  "away": {"gf": x[4], "ga": x[5], "points": x[6]}},
+        "form_window": {"max_games": 8, "prior_games": 4, "home_games": min(8, int(x[12])),
+                        "away_games": min(8, int(x[13]))},
         "model_version": artifact["version"], "cutoff": cutoff.isoformat(),
         "trained_through": artifact["trained_through"], "historical_reconstruction": historical,
     }
@@ -311,16 +398,24 @@ def _read(path):
     return json.loads(gzip.decompress(data) if path.suffix == ".gz" else data)
 
 
-def _fit_seasons(matches, output):
-    finished, features = _timeline(matches)
+def _fit_seasons(source, output, as_of):
+    end_at = _instant(as_of) if as_of is not None else _LATEST
+    finished = source.finished(end_at)
     if not finished:
         raise ValueError("No complete historical matches")
+    # Each combination of fixture and schedule may have a different prediction cutoff.
+    schedules = {_schedule_digest(m): m for m in source.base.values()}
+    for entries in source.history.values():
+        for observed, row in entries:
+            if observed <= end_at and not row.get("withdrawn"):
+                schedules[_schedule_digest(row)] = row
+    known_features = source.features([(_kickoff(m)-timedelta(days=1), m) for m in schedules.values()],
+                                     schedule_keys=True)
     grouped = defaultdict(list)
-    for m in matches:
+    for m in source.fixtures(end_at):
         if m.get("date"):
             grouped[int(m["season"][:4])].append(m)
     start, end = min(grouped), max(grouped)
-    all_dates = [t for t, _ in finished]
     previous = None
     index = []
     final_season_complete = sum(1 for _, m in finished if int(m["season"][:4]) == end) >= 380
@@ -328,15 +423,20 @@ def _fit_seasons(matches, output):
         # July 1 is the regular preseason boundary. Never train on results from
         # the target season, including if its earliest fixture is unexpectedly early.
         cutoff = datetime(year, 7, 1, tzinfo=UTC)
-        if grouped[year]:
-            cutoff = min(cutoff, min(_kickoff(m) for m in grouped[year]) - timedelta(days=1))
-        history = [m for _, m in finished[:bisect_right(all_dates, cutoff)] if int(m["season"][:4]) < year]
-        validation = [m for m in history if int(m["season"][:4]) == year-1]
+        known_schedule = [m for m in source.fixtures(min(cutoff,end_at)) if int(m["season"][:4]) == year]
+        if known_schedule:
+            cutoff = min(cutoff, min(_kickoff(m) for m in known_schedule) - timedelta(days=1))
+        if cutoff > end_at:
+            break
+        history = [m for _, m in source.finished(cutoff) if int(m["season"][:4]) < year]
+        features = {m["id"]: x for m in history if (x := known_features.get(_schedule_digest(m))) is not None}
+        validation = [m for m in history if int(m["season"][:4]) == year-1 and m["id"] in features]
         train_rows = history[-7*380:]
         weight, temp = _select_params(previous, validation, features)
         source_hash = _digest([[m["id"],m["date"],m.get("kickoff_utc"),m["home"],m["away"],m["hg"],m["ag"],
                                 m.get("result_observed_at")] for m in history])
-        artifact = {"algorithm": ALGORITHM, "dc": _dc_fit(train_rows, cutoff), "booster": _booster(train_rows, features),
+        artifact = {"algorithm": ALGORITHM, "dc": _dc_fit(train_rows, cutoff),
+                    "booster": _booster([m for m in train_rows if m["id"] in features], features),
                     "valid_from": cutoff.isoformat(), "training_digest":source_hash,
                     "trained_through": max((_available(m) for m in history),default=None),
                     "boost_weight": weight, "temperature": temp, "n_training":len(train_rows)}
@@ -352,9 +452,9 @@ def _fit_seasons(matches, output):
     return manifest
 
 
-def train(matches, output_dir=None):
+def train(matches, output_dir=None, *, versions=(), archive=None, as_of=None):
     """Rebuild per-season model artifacts. Callers can choose a writable output directory."""
-    return _fit_seasons(list(matches), Path(output_dir or MODEL_DIR))
+    return _fit_seasons(_Versions(matches,versions,archive), Path(output_dir or MODEL_DIR), as_of)
 
 
 def _select_artifact(manifest, cutoff, version=None):
@@ -366,24 +466,42 @@ def _select_artifact(manifest, cutoff, version=None):
     return max(valid, key=lambda s: s["valid_from"])["version"]
 
 
-def forecast(match, matches, cutoff=None, model_dir=None, version=None):
-    boundary = _kickoff(match) - timedelta(days=1)
-    cutoff = _instant(cutoff) if cutoff is not None else boundary
-    if cutoff > boundary:
-        raise ValueError("Forecast inputs must be frozen by T-24h")
+def forecast_many(targets, matches, cutoff=None, model_dir=None, version=None, *, versions=(), archive=None):
+    """Forecast matching schedules in one observation sweep. None means each fixture's T−24h."""
+    targets = list(targets)
+    if not targets:
+        return {}
+    common_cutoff = _instant(cutoff) if cutoff is not None else None
+    requested = []
+    for match in targets:
+        boundary = _kickoff(match) - timedelta(days=1)
+        when = common_cutoff or boundary
+        if when > boundary:
+            raise ValueError("Forecast inputs must be frozen by T-24h")
+        requested.append((when, match))
+    source = _Versions(matches, versions, archive)
+    features = source.features(requested)
     path = Path(model_dir or MODEL_DIR)
-    artifact = _read(path / (_select_artifact(_read(path/"manifest.json"), cutoff, version)+".json.gz"))
-    eligible = []
-    for m in matches:
-        if m.get("date") and m["id"] != match["id"] and m.get("hg") is not None and m.get("ag") is not None:
-            available = _available(m)
-            if available <= cutoff:
-                eligible.append((available,m))
-    state = _History()
-    for _, m in sorted(eligible, key=lambda row: (_kickoff(row[1]), row[1]["id"])):
-        state.record(m)
-    return _predict(match, state.features(match), artifact, cutoff,
-                    historical=(not match.get("kickoff_utc") or boundary < datetime.now(UTC)))
+    manifest = _read(path/"manifest.json")
+    now = datetime.now(UTC)
+    artifacts = {}
+    out = {}
+    for when, match in requested:
+        if match["id"] not in features:
+            continue
+        key = _select_artifact(manifest, when, version)
+        if key not in artifacts:
+            artifacts[key] = _read(path/(key+".json.gz"))
+        out[match["id"]] = _predict(match, features[match["id"]], artifacts[key], when,
+                                    historical=not match.get("kickoff_utc") or _kickoff(match)-timedelta(days=1)<now)
+    return out
+
+
+def forecast(match, matches, cutoff=None, model_dir=None, version=None, *, versions=(), archive=None):
+    forecasts = forecast_many([match],matches,cutoff,model_dir,version,versions=versions,archive=archive)
+    if match["id"] not in forecasts:
+        raise ValueError("Fixture schedule was not known at forecast cutoff")
+    return forecasts[match["id"]]
 
 
 def _summarize(rows):
@@ -409,25 +527,77 @@ def _summarize(rows):
             "n":len(rows),"warmup_seasons":2,"scope":"independent_historical_reconstruction"}
 
 
-def backtest(matches, output_dir=None):
-    matches = list(matches)
+_COMPONENTS = {"elo":"elo_probs", "dc":"dc_probs", "tree":"tree_probs", "a":"probs"}
+
+
+def _class_bins(values, truth):
+    bucket = np.minimum((values*10).astype(int), 9)
+    bins = []
+    for b in range(10):
+        mask = bucket == b
+        bins.append({"lo": b/10, "hi": (b+1)/10, "n": int(mask.sum()),
+                     "p": float(values[mask].mean()) if mask.any() else None,
+                     "observed": float(truth[mask].mean()) if mask.any() else None})
+    return bins
+
+
+def _component_scores(rows):
+    common = [row for row in rows if all(row["probs"][k] is not None for k in _COMPONENTS)]
+    y = np.array([OUTCOMES.index(row["actual"]) for row in common], dtype=int)
+    truth = np.eye(3)[y]
+    scores, calibration = {}, {}
+    for k in _COMPONENTS:
+        missing = sum(row["probs"][k] is None for row in rows)
+        probs = np.array([row["probs"][k] for row in common]).reshape(-1,3)
+        scores[k] = {"n":len(common), "missing":missing,
+                     "log_loss":float(-np.log(probs[np.arange(len(y)),y].clip(1e-15)).mean()) if common else None,
+                     "brier":float(((probs-truth)**2).sum(axis=1).mean()) if common else None,
+                     "accuracy":float((probs.argmax(axis=1)==y).mean()) if common else None}
+        calibration[k] = {side:_class_bins(probs[:,i],truth[:,i]) for i, side in enumerate(OUTCOMES)}
+    return {"n":len(common), "total":len(rows), "scores":scores, "calibration":calibration}
+
+
+def _diagnostics(rows):
+    by_season = defaultdict(list)
+    records = []
+    for m, p in rows:
+        record = {"id":m["id"],"season":m["season"],"date":m["date"],"home":m["home"],"away":m["away"],
+                  "actual":OUTCOMES[_outcome(m["hg"],m["ag"])],"cutoff":p["cutoff"],"model_version":p["model_version"],
+                  "probs":{k:p[field] for k,field in _COMPONENTS.items()}}
+        records.append(record)
+        by_season[m["season"]].append(record)
+    all_scores = _component_scores(records)
+    return {"models":list(_COMPONENTS), "n":all_scores["n"], "total":len(records), "overall":all_scores["scores"],
+            "calibration":all_scores["calibration"],
+            "seasons":[{"season":season,**_component_scores(group)} for season,group in sorted(by_season.items())]}, records
+
+
+def backtest(matches, output_dir=None, *, versions=(), archive=None, as_of=None):
+    source = _Versions(matches, versions, archive)
     path = Path(output_dir or MODEL_DIR)
-    manifest = _read(path/"manifest.json") if (path/"manifest.json").is_file() else train(matches,path)
-    finished, features = _timeline(matches)
+    manifest = _read(path/"manifest.json") if (path/"manifest.json").is_file() else _fit_seasons(source,path,as_of)
+    finished, features = _evaluation_view(source, as_of)
     replays, rows, artifacts = {}, [], {}
-    start = min(int(m["season"][:4]) for _,m in finished)
+    start = min((int(m["season"][:4]) for _,m in finished), default=None)
+    missed_schedules = 0
     for _, m in finished:
         if int(m["season"][:4]) < start+2:
+            continue
+        if m["id"] not in features:
+            missed_schedules += 1
             continue
         cutoff = _kickoff(m)-timedelta(days=1)
         v = _select_artifact(manifest,cutoff)
         if v not in artifacts:
             artifacts[v] = _read(path/(v+".json.gz"))
         p = _predict(m,features[m["id"]],artifacts[v],cutoff,historical=True)
-        p["source_fixture_digest"] = fixture_digest(m)
+        p["schedule_digest"] = _schedule_digest(m)
         replays[m["id"]] = p
         rows.append((m,p))
     report = _summarize(rows)
+    report["diagnostics"], report["rows"] = _diagnostics(rows)
+    report["schedule_unknown_at_cutoff"] = missed_schedules
+    report["labels_as_of"] = _instant(as_of).isoformat() if as_of is not None else None
     report["artifact_digest"] = _digest(manifest)
     _write(path/"replays.json.gz",replays)
     _write(path/"report.json",report)

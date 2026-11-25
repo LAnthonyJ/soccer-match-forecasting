@@ -42,16 +42,17 @@ class PublicWorkflowTests(unittest.TestCase):
             self.assertEqual(self.client.post("/api/ask",json={"question":{}}).status_code,400)
             self.assertEqual(self.client.get("/api/ledger").json["records"],[])
 
-    def test_source_revision_invalidates_old_replay(self):
+    def test_score_revision_keeps_prediction_and_schedule_revision_invalidates_it(self):
         fixture="2026-27_fulham_manchester-united"
         rows=data.load_matches()
         changed=next(m for m in rows if m["id"]==fixture)
         original=changed["ag"]
         changed["ag"]=original+1
         with patch.object(service,"fixtures",return_value=rows):
-            self.assertIsNone(service.prediction(fixture)["prediction"])
+            self.assertIsNotNone(service.prediction(fixture)["prediction"])
             row=next(m for m in service.dashboard("2026-27")["fixtures"] if m["id"]==fixture)
-            self.assertIsNone(row["prediction"])
+            self.assertIsNotNone(row["prediction"])
+            self.assertFalse(service.models.replay_matches(service.history()[0][fixture],dict(changed,date="2026-09-21")))
 
     def test_static_export_excludes_secret_material(self):
         target=self.root/"pages"

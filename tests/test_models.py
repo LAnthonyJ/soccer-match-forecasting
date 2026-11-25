@@ -1,7 +1,7 @@
 import json
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 
@@ -82,6 +82,71 @@ class ForecastTests(unittest.TestCase):
         self.assertAlmostEqual(sum(models.challenger_forecast(fit,a,m)),1.)
         with self.assertRaises(ValueError):
             models.fit_challenger(sample+[sample[0]])
+
+    def test_score_versions_at_feature_training_and_report_cutoffs(self):
+        first = fixture(1,"2023-09-01","A","B")
+        following = fixture(2,"2023-09-10","A","C",0,3)
+        later = fixture(3,"2023-09-14","A","D")
+        original = dict(first,hg=1,ag=1,result_observed_at="2023-09-02T10:00:00Z",observed_at="2023-09-02T10:00:00Z")
+        corrected = dict(original,hg=2,result_observed_at="2023-09-12T10:00:00Z",observed_at="2023-09-12T10:00:00Z")
+        archive = [first,following,later,fixture(4,"2021-08-01","X","Y",0,0,"2021-22"),
+                   fixture(5,"2022-08-01","X","Y",0,0,"2022-23")]
+        schedule = dict(first,observed_at="2023-08-05T10:00:00Z")
+        with tempfile.TemporaryDirectory() as folder:
+            models.train(archive,folder)
+            def replay(versions, at):
+                return models.backtest(archive,folder,versions=versions,archive=archive,as_of=at)
+            old = replay([schedule,original,corrected],"2023-09-11T18:00:00Z")
+            new = replay([schedule,original,corrected],"2023-09-15T18:00:00Z")
+            self.assertEqual([r['actual'] for r in old['rows'] if r['id']=='1'],['D'])
+            self.assertEqual([r['actual'] for r in new['rows'] if r['id']=='1'],['H'])
+            self.assertEqual({r['id']:r['probs'] for r in old['rows']},{r['id']:r['probs'] for r in new['rows']})
+            for target, count, goals in ((following,1,1),(later,2,2)):
+                p = models.forecast(target,archive,model_dir=folder,archive=archive,versions=[corrected,original,schedule])
+                self.assertEqual(p['samples']['home'],count)
+                self.assertAlmostEqual(p['form']['home']['gf'],(5.4+goals)/(4+count))
+            # A late correction to a previous season cannot affect a model fitted on July 1.
+            summer = dict(corrected,observed_at="2024-07-03T10:00:00Z",result_observed_at="2024-07-03T10:00:00Z")
+            training = archive+[fixture(6,"2024-08-12","X","Y",1,0,"2024-25")]
+            a = models.train(training,folder,archive=training,versions=[schedule,original])
+            b = models.train(training,folder,archive=training,versions=[schedule,original,summer])
+            self.assertEqual(a['seasons'],b['seasons'])
+
+    def test_withdrawals_reinstatements_and_late_schedule_do_not_enter_prior_features(self):
+        initial = fixture(1,"2023-09-01","A","B",1,0)
+        targets = [fixture(i,"2023-09-"+day,"A","C") for i,day in ((2,"10"),(3,"14"))]
+        versions = [dict(initial,withdrawn=True,observed_at="2023-09-07T11:00:00Z"),
+                    dict(initial,observed_at="2023-09-11T11:00:00Z"),
+                    dict(targets[0],date="2023-09-11",kickoff_utc="2023-09-11T15:00:00Z",
+                         observed_at="2023-09-11T10:00:00Z")]
+        source = models._Versions([],versions,[initial,*targets])
+        future = versions[-1]
+        features = source.features([(models._kickoff(m)-timedelta(days=1),m) for m in targets])
+        self.assertEqual(features['2'][9],0)
+        self.assertEqual(features['3'][9],1)
+        self.assertEqual(source.features([(models._kickoff(future)-timedelta(days=1),future)]),{})
+
+    def test_reference_dixon_coles_grid_and_diagnostics_common_sample(self):
+        # penaltyblog 1.13.2 Cython compute_dixon_coles_probabilities, 21 x 21, normalized.
+        dc = {"clubs":{},"home":float(np.log(1.7/1.1)),"intercept":float(np.log(1.1)),"rho":-.08}
+        match=fixture(1,"2023-09-01","H","A",1,1)
+        p, grid, _ = models._matrix(dc,match,[0]*12)
+        np.testing.assert_allclose(grid[:2,:2].ravel(),
+            [.06990724799395058,.057793883519007175,.09427992109413798,.12281200247789027],rtol=0,atol=1e-13)
+        np.testing.assert_allclose(p,[.5049282158006496,.2583195006807707,.23675228351857988],rtol=0,atol=1e-13)
+        self.assertAlmostEqual(grid.sum(),1)
+        base = {"cutoff":"t","model_version":"v",**{field:p.tolist() for field in models._COMPONENTS.values()}}
+        summary, rows = models._diagnostics([(match,base),(dict(match,id="2"),dict(base,tree_probs=None))])
+        self.assertEqual(len(rows),2)
+        self.assertEqual(summary["overall"]["tree"]["missing"],1)
+        for name in models._COMPONENTS:
+            self.assertEqual(summary["overall"][name]["n"],1)
+            self.assertAlmostEqual(summary["overall"][name]["log_loss"],-np.log(p[1]))
+            for outcome in "HDA":
+                bins=summary["calibration"][name][outcome]
+                self.assertEqual(sum(b["n"] for b in bins),1)
+                populated=next(b for b in bins if b["n"])
+                self.assertEqual(populated["observed"],int(outcome=="D"))
 
     def test_candidate_validates_market_receipt_and_models(self):
         from epl_agent.challenger import _verified, train_candidate

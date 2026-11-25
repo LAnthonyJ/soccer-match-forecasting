@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { Ask } from './Ask'
 import { Match, TeamMark, ListChance } from './Match'
 import { Report } from './Report'
-import { type Dashboard, type Fixture, fetchDash, fmtTime, isStatic, fixtureStatus, nameOf, weekOf } from './data'
+import { type Dashboard, type Fixture, fetchDash, fetchSeasonFixtures, fmtTime, isStatic, fixtureStatus, nameOf, weekOf } from './data'
 import './style.css'
 
 type View = 'matches'|'report'|'ask'
@@ -21,6 +21,7 @@ function App() {
   const [detail,setDetail]=useState<Fixture|null>(null),[detailError,setDetailError]=useState(''),[retryDetail,setRetryDetail]=useState(0)
   const [older,setOlder]=useState<Fixture[]>([]),[busy,setBusy]=useState(false),[seasonError,setSeasonError]=useState(''),[retrySeason,setRetrySeason]=useState(0)
   const [limit,setLimit]=useState(40),[mobile,setMobile]=useState<'list'|'detail'>('detail'),[initialAsk,setInitialAsk]=useState('')
+  const [missingOnly,setMissingOnly]=useState(false)
   const listNode=useRef<HTMLDivElement>(null)
   useEffect(()=>{const fn=()=>setNav(route());window.addEventListener('hashchange',fn);return ()=>window.removeEventListener('hashchange',fn)},[])
   useEffect(()=>{
@@ -28,7 +29,7 @@ function App() {
     fetchDash(undefined,c.signal).then(d=>{
       if(c.signal.aborted) return
       const first=d.fixtures.find(f=>f.id===route().id)||d.fixtures.find(f=>f.id===d.default_id)||d.fixtures[0]
-      setData(d);if(first){setSeason(first.season);setWeek(weekOf(first));setChosen(first.id)}
+      setData(d);if(first){const linkSeason=route().id.match(/^(20\d\d-\d\d)_/)?.[1];setSeason(linkSeason||first.season);setWeek(linkSeason&&linkSeason!==first.season?'':weekOf(first));setChosen(first.id)}
     }).catch(()=>{if(!c.signal.aborted) setFailure('比赛数据加载失败。请确认本地服务或静态数据包可访问。')})
     return ()=>c.abort()
   },[attempt])
@@ -37,11 +38,11 @@ function App() {
   const summary=useMemo(()=>matches.find(f=>f.id===id),[matches,id])
   const extra=detail?.id===id?detail:null
   const f=extra||summary
-  const seasons=useMemo(()=>Array.from(new Set([...(data?.available_seasons||[]),...matches.map(x=>x.season),...(season?[season]:[])])).sort().reverse(),[matches,data,season])
+  const seasons=useMemo(()=>Array.from(new Set([...(data?.archive_seasons||data?.available_seasons||[]),...matches.map(x=>x.season),...(season?[season]:[])])).sort().reverse(),[matches,data,season])
   useEffect(()=>{
-    if(!data || !season || isStatic() || data.fixtures.some(x=>x.season===season)) {setBusy(false);setSeasonError('');return}
+    if(!data || !season || data.fixtures.some(x=>x.season===season)) {setBusy(false);setSeasonError('');return}
     const c=new AbortController();setBusy(true);setSeasonError('')
-    fetchDash(season,c.signal).then(d=>{if(!c.signal.aborted)setOlder(d.fixtures)}).catch(()=>{if(!c.signal.aborted)setSeasonError('这个赛季的赛程加载失败。')}).finally(()=>{if(!c.signal.aborted)setBusy(false)})
+    fetchSeasonFixtures(season,c.signal).then(rows=>{if(!c.signal.aborted)setOlder(rows)}).catch(()=>{if(!c.signal.aborted)setSeasonError('这个赛季的赛程加载失败。')}).finally(()=>{if(!c.signal.aborted)setBusy(false)})
     return ()=>c.abort()
   },[data,season,retrySeason])
   useEffect(()=>{
@@ -60,7 +61,8 @@ function App() {
   const inSeason=matches.filter(x=>x.season===season).sort((a,b)=>a.date.localeCompare(b.date)||String(a.kickoff_utc||'').localeCompare(String(b.kickoff_utc||''))||a.id.localeCompare(b.id))
   const weeks=Array.from(new Set(inSeason.map(weekOf))).sort((a,b)=>a.localeCompare(b,'zh-CN',{numeric:true}))
   const q=query.trim().toLowerCase()
-  const filtered=inSeason.filter(x=>(q||!week||weekOf(x)===week)&&(!q||[x.home,x.away,nameOf(x,'home'),nameOf(x,'away')].some(t=>t.toLowerCase().includes(q))))
+  const missingIds=new Set(data?.health?.overdue_ids||[])
+  const filtered=inSeason.filter(x=>(!missingOnly||missingIds.has(x.id))&&(q||!week||weekOf(x)===week)&&(!q||[x.home,x.away,nameOf(x,'home'),nameOf(x,'away')].some(t=>t.toLowerCase().includes(q))))
   useEffect(()=>{
     const list=listNode.current
     const button=list?.querySelector<HTMLButtonElement>('button.active')
@@ -70,8 +72,13 @@ function App() {
   },[id,week,season,data,mobile])
   function select(fid:string) {setInitialAsk('');setChosen(fid);setMobile('detail');location.hash='/match/'+encodeURIComponent(fid)}
   function toPage(page:View) {setInitialAsk('');if(id)setChosen(id);location.hash=page==='matches'?(id?'/match/'+encodeURIComponent(id):'/matches'):'/'+page}
-  function selectSeason(s:string){setSeason(s);setWeek('');setQuery('');setLimit(40);setMobile('list')}
-  function changeWeek(value:string){setWeek(value);setQuery('');setLimit(40);setMobile('list')}
+  function selectSeason(s:string){setMissingOnly(false);setSeason(s);setWeek('');setQuery('');setLimit(40);setMobile('list')}
+  function changeWeek(value:string){setMissingOnly(false);setWeek(value);setQuery('');setLimit(40);setMobile('list')}
+  function jump(fid?:string) {
+    const game=matches.find(m=>m.id===fid)
+    if(!game)return
+    setMissingOnly(false);setSeason(game.season);setWeek(weekOf(game));setQuery('');setLimit(40);select(game.id)
+  }
   const title=tabs.find(([key])=>key===nav.view)![1]
   useEffect(()=>{document.title=title+' · 英超观察台'},[title])
   return <><a className="skip" href="#content" onClick={e=>{e.preventDefault();document.getElementById('content')?.focus()}}>跳到主要内容</a>
@@ -79,8 +86,14 @@ function App() {
       <nav aria-label="主导航">{tabs.map(([k,label])=><a href={'#/'+k} key={k} aria-current={k===nav.view?'page':undefined} onClick={e=>{e.preventDefault();toPage(k)}}><i aria-hidden="true" className={'nav-icon '+k}/>{label}</a>)}</nav>
       <span className="edition">MATCHDESK <b>/</b> EPL</span></div></header>
     <main className="shell" id="content" tabIndex={-1}><div className="page-title"><div><div className="eyebrow"><span aria-hidden="true"/>英格兰足球超级联赛</div><h1>{title}</h1></div>
-      {data&&<span className="updated">{data.source_updated_at?'数据更新':'数据版本'} <b>{data.source_updated_at?fmtTime(data.source_updated_at,true):data.data_version?.slice(0,9)||'本地快照'}</b></span>}</div>
-    {failure?<section role="alert" className="panel">{failure} <button className="plain" onClick={()=>setAttempt(attempt+1)}>重试</button></section>:!data?<p role="status" className="panel">正在加载英超比赛…</p>:nav.view==='report'?<Report r={data.report} openMatch={(fid,s)=>{setSeason(s);setWeek('');select(fid)}}/>:nav.view==='ask'?<Ask key={id+initialAsk} data={{...data,fixtures:matches}} f={f||undefined} initial={initialAsk} select={select}/>:<>
+      {data&&<span className="updated">比分更新至 <b>{fmtTime(data.health?.last_scored_date||data.last_scored_date,true)}</b></span>}</div>
+    {failure?<section role="alert" className="panel">{failure} <button className="plain" onClick={()=>setAttempt(attempt+1)}>重试</button></section>:!data?<p role="status" className="panel">正在加载英超比赛…</p>:nav.view==='report'?<Report r={data.report} publicSnapshot={Boolean(data.public_snapshot)} openMatch={(fid,s)=>{setSeason(s);setWeek('');select(fid)}}/>:nav.view==='ask'?<Ask key={id+initialAsk} data={{...data,fixtures:matches}} f={f||undefined} initial={initialAsk} select={select}/>:<>
+      <section className="board-tools" aria-label="比赛入口与数据状态"><div className="board-jumps">
+        <button className="jump-live" disabled={!data.current_id} onClick={()=>jump(data.current_id)}>看本轮 <span aria-hidden="true">↗</span></button>
+        <button className="jump-replay" onClick={()=>jump(data.default_id)}>体验历史回放</button></div>
+        {data.health&&<div className="health-line"><span>最近成功同步 <b>{data.health.last_sync_at?fmtTime(data.health.last_sync_at):'尚无本地同步记录'}</b></span>
+        <button aria-pressed={missingOnly} onClick={()=>{selectSeason(data.health!.season);setMissingOnly(!missingOnly)}}>待补 {data.health.overdue_count} 场</button>
+        {data.health.conflict_count>0&&<span>其中 {data.health.conflict_count} 场比分待核实</span>}</div>}</section>
       <div className="mobile-tabs"><button aria-pressed={mobile==='list'} onClick={()=>setMobile('list')}>赛程列表</button><button aria-pressed={mobile==='detail'} onClick={()=>setMobile('detail')}>比赛详情</button></div>
       <div className={'workspace show-'+mobile}>
       <aside className="schedule"><div className="schedule-top"><div className="section-head"><h2>联赛赛程</h2><span>{season}</span></div>
@@ -88,7 +101,7 @@ function App() {
           <label>比赛周<select aria-label="比赛周" value={week} onChange={e=>changeWeek(e.target.value)}><option value="">全部比赛周</option>{weeks.map(w=><option key={w}>{w}</option>)}</select></label></div>
         <label className="search"><i aria-hidden="true"/><input aria-label="搜索球队" placeholder="搜索球队 · 中文或英文" value={query} onChange={e=>{setQuery(e.target.value);setLimit(40)}}/>{query&&<button aria-label="清除搜索" onClick={()=>setQuery('')}>×</button>}</label>
       </div>
-        <div className="list-meta"><span>{q?'搜索结果':week||'全部赛程'}</span><b>{filtered.length} 场</b></div>
+        <div className="list-meta"><span>{missingOnly?'超过开球时间 24 小时仍待补':q?'搜索结果':week||'全部赛程'}</span><b>{filtered.length} 场</b></div>
         {busy?<p className="list-note" role="status">正在加载赛程…</p>:seasonError?<p className="list-note" role="alert">{seasonError}<button onClick={()=>setRetrySeason(retrySeason+1)}>重试</button></p>:!filtered.length?<p className="list-note">没有匹配的比赛。</p>:<div className="fixtures" ref={listNode}>{filtered.slice(0,limit).map(x=><button className={'fixture '+(id===x.id?'active':'')} key={x.id} aria-pressed={id===x.id} onClick={()=>select(x.id)}>
           <span className="fixture-meta">{fmtTime(x.kickoff_utc||x.date)}<span>{fixtureStatus(extra?.id===x.id?extra:x)}</span></span>
           <span className="fixture-teams"><span><TeamMark team={x.home} small/>{nameOf(x,'home')}</span><span><TeamMark team={x.away} small/>{nameOf(x,'away')}</span></span>
@@ -99,6 +112,6 @@ function App() {
         {detailError&&<p role="status" className="notice">{detailError} <button onClick={()=>setRetryDetail(retryDetail+1)}>重试</button></p>}
         {f?<Match key={f.id} f={f} openAsk={q=>{setChosen(f.id);setInitialAsk(q);location.hash='/ask'}}/>:<section className="panel">{isStatic()&&id?'静态演示未包含这场比赛，请从赛程列表选择已收录样本。':id&&!detailError?'正在读取比赛详情…':'请选择一场比赛。'}</section>}
       </div></div></>}
-    </main><footer className="shell"><span>英超观察台</span><span>90 分钟含补时 · 时间按本地时区显示</span></footer></>
+    </main><footer className="shell"><span>英超观察台 · 常规时间含补时</span><span>比分来源 <a href="https://github.com/openfootball/england">openfootball · CC0</a> / <a href="https://www.openligadb.de/en/license">OpenLigaDB · ODbL 1.0</a></span></footer></>
 }
 createRoot(document.getElementById('root')!).render(<App/>)

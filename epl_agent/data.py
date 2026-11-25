@@ -260,92 +260,137 @@ def load_matches(db_path=None, *, as_of=None):
 
 
 def _get(url):
-    req = Request(url, headers={"User-Agent": "epl-prediction-agent/0.1"})
+    req = Request(url, headers={"User-Agent": "epl-prediction-agent/1.0 (EPL research; hourly cached season sync)"})
     with urlopen(req, timeout=20) as response:
-        return response.read(5_000_001)
+        limit = 32_000_000 if url.startswith("https://api.openligadb.de/") else 5_000_000
+        payload = response.read(limit + 1)
+        if len(payload) > limit:
+            raise ValueError("Source response exceeds size limit")
+        return payload
 
 
-def record_observation(db_path, season, rows, *, source_commit, observed):
-    """Store one complete upstream view atomically; keep historical revisions readable."""
-    received = _utc(observed)
+def _prepare_versions(db):
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS fixture_versions (
+            id TEXT NOT NULL, observed TEXT NOT NULL, payload TEXT NOT NULL,
+            PRIMARY KEY (id, observed)
+        );
+        CREATE TABLE IF NOT EXISTS season_syncs (
+            season TEXT NOT NULL, observed TEXT NOT NULL, source_commit TEXT NOT NULL,
+            changed INTEGER NOT NULL, PRIMARY KEY(season, observed)
+        );
+    """)
+
+
+def _validate_season(rows, season):
     report = coverage(rows, season)
     if report["duplicates"] or report["teams"] != 20 or report["fixtures"] != 380:
         raise ValueError("Incomplete or duplicate-fixture upstream season; previous schedule retained")
-    if not all(r["season"] == season for r in rows):
-        raise ValueError("Mixed seasons in observation")
-    path = Path(db_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with closing(sqlite3.connect(path, timeout=10)) as db:
-        db.executescript("""
-            CREATE TABLE IF NOT EXISTS fixture_versions (
-                id TEXT NOT NULL, observed TEXT NOT NULL, payload TEXT NOT NULL,
-                PRIMARY KEY (id, observed)
-            );
-            CREATE TABLE IF NOT EXISTS season_syncs (
-                season TEXT NOT NULL, observed TEXT NOT NULL, source_commit TEXT NOT NULL,
-                changed INTEGER NOT NULL, PRIMARY KEY(season, observed)
-            );
-        """)
-        db.execute("BEGIN IMMEDIATE")
-        latest = db.execute("SELECT MAX(observed) FROM season_syncs WHERE season=?", (season,)).fetchone()[0]
-        if latest and latest > received:
-            raise ValueError("A more recent schedule observation is already committed")
-        previous = {}
-        for (raw,) in _versions(db, received):
-            item = json.loads(raw)
-            if item["season"] == season:
-                previous[item["id"]] = item
-        changed = 0
-        known = {k: v for k, v in _base().items() if v["season"] == season}
-        known.update(previous)
-        published_ids = {r["id"] for r in rows}
-        for key in known.keys() - published_ids:
-            old = known[key]
-            if old.get("withdrawn"):
-                continue
-            if latest == received:
-                raise ValueError("Conflicting observations at the same timestamp")
-            withdrawn = dict(old, withdrawn=True, observed_at=received, schedule_observed_at=received,
-                             schedule_revision=old.get("schedule_revision", 0) + 1,
-                             source_commit=source_commit, revised_fields=["withdrawn"])
-            db.execute("INSERT INTO fixture_versions VALUES(?,?,?)",
-                       (key, received, json.dumps(withdrawn, ensure_ascii=False)))
-            changed += 1
-        for source in rows:
-            row = dict(source)
-            old = previous.get(row["id"])
-            if old and not old.get("withdrawn") and all(row[k] == old.get(k) for k in FIELDS):
-                continue
-            if latest == received:
-                raise ValueError("Conflicting observations at the same timestamp")
-            schedule_changed = (old is None or old.get("withdrawn") or
-                                any(row[k] != old[k] for k in ("date", "kickoff_utc", "round")))
-            result_changed = old is None or (row["hg"], row["ag"]) != (old["hg"], old["ag"])
-            row.update(observed_at=received, source_commit=source_commit,
-                       schedule_revision=(old["schedule_revision"] if old else 0) + int(schedule_changed),
-                       schedule_observed_at=received if schedule_changed else old["schedule_observed_at"],
-                       result_observed_at=(received if result_changed or old.get("withdrawn") else old["result_observed_at"])
-                       if row["hg"] is not None else None)
-            row["revised_fields"] = [k for k in FIELDS if old and old[k] != row[k]]
-            db.execute("INSERT INTO fixture_versions VALUES(?,?,?)",
-                       (row["id"], received, json.dumps(row, ensure_ascii=False)))
-            changed += 1
-        if changed == 0 and latest == received:
-            db.rollback()
-        else:
-            db.execute("INSERT INTO season_syncs VALUES(?,?,?,?)", (season, received, source_commit, changed))
-            db.commit()
+    if report["missing"] or any(r["season"] != season or r["home"] == r["away"] or
+                                r["id"] != fixture_id(season, r["home"], r["away"]) for r in rows):
+        raise ValueError("Mixed seasons or invalid canonical fixture in observation")
+    return report
+
+
+def _record_view(db, season, rows, *, source_commit, observed):
+    received = _utc(observed)
+    report = _validate_season(rows, season)
+    latest = db.execute("SELECT MAX(observed) FROM season_syncs WHERE season=?", (season,)).fetchone()[0]
+    if latest and latest > received:
+        raise ValueError("A more recent schedule observation is already committed")
+    previous = {}
+    for (raw,) in _versions(db, received):
+        item = json.loads(raw)
+        if item["season"] == season:
+            previous[item["id"]] = item
+    changed = 0
+    known = {k: v for k, v in _base().items() if v["season"] == season}
+    known.update(previous)
+    published_ids = {r["id"] for r in rows}
+    for key in known.keys() - published_ids:
+        old = known[key]
+        if old.get("withdrawn"):
+            continue
+        if latest == received:
+            raise ValueError("Conflicting observations at the same timestamp")
+        withdrawn = dict(old, withdrawn=True, observed_at=received, schedule_observed_at=received,
+                         schedule_revision=old.get("schedule_revision", 0) + 1,
+                         source_commit=source_commit, revised_fields=["withdrawn"])
+        db.execute("INSERT INTO fixture_versions VALUES(?,?,?)",
+                   (key, received, json.dumps(withdrawn, ensure_ascii=False)))
+        changed += 1
+    for source in rows:
+        row = dict(source)
+        old = previous.get(row["id"])
+        tracked = FIELDS + ["source_conflict", "source_observations", "result_source", "schedule_source", "resolution"]
+        if old and not old.get("withdrawn") and all(row.get(k) == old.get(k) for k in tracked):
+            continue
+        if latest == received:
+            raise ValueError("Conflicting observations at the same timestamp")
+        schedule_changed = (old is None or old.get("withdrawn") or
+                            any(row[k] != old[k] for k in ("date", "kickoff_utc", "round")))
+        result_changed = old is None or (row["hg"], row["ag"]) != (old["hg"], old["ag"])
+        schedule_at = row.get("schedule_observed_at", received)
+        result_at = row.get("result_observed_at", received)
+        if old and old.get("source_conflict") and not row.get("source_conflict"):
+            # Settlement became possible on resolution, even if the agreed score was reported earlier.
+            result_at = received
+        if old and not old.get("withdrawn"):
+            if not schedule_changed:
+                schedule_at = old.get("schedule_observed_at") or schedule_at
+            if not result_changed:
+                result_at = old.get("result_observed_at") or result_at
+        row.update(observed_at=received, source_commit=source_commit,
+                   schedule_revision=(old["schedule_revision"] if old else 0) + int(schedule_changed),
+                   schedule_observed_at=schedule_at,
+                   result_observed_at=result_at if row["hg"] is not None else None)
+        row["revised_fields"] = [k for k in FIELDS if old and old[k] != row[k]]
+        db.execute("INSERT INTO fixture_versions VALUES(?,?,?)",
+                   (row["id"], received, json.dumps(row, ensure_ascii=False)))
+        changed += 1
+    if changed or latest != received:
+        db.execute("INSERT INTO season_syncs VALUES(?,?,?,?)", (season, received, source_commit, changed))
     return {"season": season, "upstream": source_commit, "observed_at": received,
             "fixtures": report["fixtures"], "completed": report["completed"], "changed": changed}
 
 
-def sync(db_path, *, season=None):
+def record_observation(db_path, season, rows, *, source_commit, observed):
+    """Commit a full normalized primary view. Older v0.1 databases remain readable."""
+    path = Path(db_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(path, timeout=15)) as db, db:
+        _prepare_versions(db)
+        db.execute("BEGIN IMMEDIATE")
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='provider_fixtures'").fetchone():
+            from .source_sync import PRIMARY, _merged, _store
+            received = _utc(observed)
+            _validate_season(rows, season)
+            _store(db,season,PRIMARY,rows,received,source_commit)
+            rows = _merged(db,season,received)
+        return _record_view(db, season, rows, source_commit=source_commit, observed=observed)
+
+
+def load_versions(db_path, *, as_of=None):
+    if not db_path or not Path(db_path).is_file():
+        return []
+    uri = Path(db_path).resolve().as_uri() + "?mode=ro"
+    with closing(sqlite3.connect(uri, uri=True)) as db:
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE name='fixture_versions'").fetchone():
+            return []
+        cutoff = _utc(as_of) if as_of is not None else "9999"
+        return [json.loads(row[0]) for row in db.execute(
+            "SELECT payload FROM fixture_versions WHERE observed<=? ORDER BY observed,id", (cutoff,))]
+
+
+def load_version_history(db_path, *, as_of=None):
+    histories = {}
+    for row in load_versions(db_path, as_of=as_of):
+        histories.setdefault(row["id"], []).append(row)
+    return histories
+
+
+def _primary(season):
     """Fetch the latest free openfootball EPL file(s) under one immutable Git commit."""
-    today = datetime.now(LONDON).date()
-    first_year = today.year if today.month >= 7 else today.year - 1
-    season = season or f"{first_year}-{str(first_year + 1)[-2:]}"
-    if not re.fullmatch(r"20\d\d-\d\d", season):
-        raise ValueError("Use a season like 2026-27")
     source = json.loads(_get("https://api.github.com/repos/openfootball/england/commits/master"))["sha"]
     if not re.fullmatch(r"[0-9a-f]{40}", source):
         raise ValueError("Invalid upstream revision")
@@ -356,7 +401,27 @@ def sync(db_path, *, season=None):
     rows = parse_season(body.decode("utf-8-sig"), season)
     if season == "2025-26":
         apply_explicit_offsets(rows, _get(f"{url}/1-premierleague-full.txt").decode("utf-8-sig"))
-    return record_observation(db_path, season, rows, source_commit=source, observed=datetime.now(timezone.utc))
+    return rows, source
+
+
+def sync(db_path, *, season=None):
+    from .source_sync import synchronize
+    today = datetime.now(LONDON).date()
+    year = today.year - (today.month < 7)
+    season = season or f"{year}-{str(year+1)[-2:]}"
+    if not re.fullmatch(r"20\d\d-\d\d", season) or int(season[-2:]) != (int(season[:4])+1)%100:
+        raise ValueError("Use a season like 2026-27")
+    return synchronize(db_path, season)
+
+
+def season_health(db_path, season, matches=None, now=None):
+    from .source_sync import health
+    return health(db_path, season, matches, now)
+
+
+def openligadb_overlay(db_path, season=None, *, as_of=None):
+    from .source_sync import overlay
+    return overlay(db_path, season, as_of)
 
 
 if __name__ == "__main__":

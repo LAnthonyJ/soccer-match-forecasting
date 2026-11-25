@@ -10,6 +10,7 @@ from .market import canonical, database, digest, instant, read_value, write_valu
 
 _COMMENT = re.compile(r"https://github\.com/([A-Za-z0-9-]+)/([A-Za-z0-9_.-]+)/issues/([1-9]\d*)#issuecomment-([1-9]\d*)\Z")
 SUMMARY_KEYS = ("id","season","kickoff","cutoff","frozen","a","market","b","model_version")
+MAINTAINER = {"OWNER","MEMBER","COLLABORATOR"}
 
 
 def comment_api(url):
@@ -24,7 +25,7 @@ def _summary(payload):
     return {key:payload[key] for key in SUMMARY_KEYS}
 
 
-def audit_public(ledger, session=None):
+def audit_public(ledger, session=None, *, expected_issue=None, as_of=None):
     """Re-read registered hashes and forecast summaries from public, unedited comments."""
     client = session or requests.Session()
     headers = {"Accept":"application/vnd.github+json"}
@@ -34,22 +35,54 @@ def audit_public(ledger, session=None):
         if token:
             headers["Authorization"] = "Bearer "+token
     cache, public_repos, errors, verified = {}, {}, [], {}
+    inventory = None
+
+    def read_inventory():
+        if not _COMMENT.fullmatch(expected_issue+"#issuecomment-1"):
+            raise ValueError("Invalid configured evidence issue")
+        api = comment_api(expected_issue+"#issuecomment-1").split("/issues/comments/")[0]
+        response = client.get(api,headers=headers,timeout=12,allow_redirects=False)
+        if response.status_code != 200 or response.json().get("private") is not False:
+            raise ValueError("Configured witness repository is not publicly readable")
+        url = api+"/issues/"+expected_issue.rsplit("/",1)[1]+"/comments"
+        docs = {}
+        page = 1
+        while True:
+            resp = client.get(url,params={"per_page":100,"page":page},headers=headers,timeout=20,allow_redirects=False)
+            if resp.status_code != 200:
+                raise ValueError(f"Evidence inventory returned HTTP {resp.status_code}")
+            items = resp.json()
+            if not isinstance(items,list):
+                raise ValueError("Invalid evidence inventory")
+            for c in items:
+                if c["html_url"].split("#")[0]!=expected_issue:
+                    raise ValueError("Evidence from another issue")
+                if as_of is None or instant(c["created_at"])<=instant(as_of):
+                    docs[c["html_url"]] = c
+            if len(items)<100:
+                return docs
+            page += 1
 
     def verify(url, at, header, text):
         api_url = comment_api(url)
         if url not in cache:
             try:
-                if "Authorization" in headers:
+                if inventory is None and "Authorization" in headers:
                     repo_url = api_url.split("/issues/comments/")[0]
                     if repo_url not in public_repos:
                         visibility = client.get(repo_url,headers=headers,timeout=8,allow_redirects=False)
                         public_repos[repo_url] = visibility.status_code == 200 and visibility.json().get("private") is False
                     if not public_repos[repo_url]:
                         raise ValueError("Repository is private or no longer accessible")
-                resp = client.get(api_url,headers=headers,timeout=8,allow_redirects=False)
-                if resp.status_code != 200:
-                    raise ValueError(f"GitHub returned HTTP {resp.status_code}")
-                comment = resp.json()
+                if inventory is not None:
+                    if url not in inventory:
+                        raise ValueError("Evidence missing from configured issue at snapshot time")
+                    comment = inventory[url]
+                else:
+                    resp = client.get(api_url,headers=headers,timeout=8,allow_redirects=False)
+                    if resp.status_code != 200:
+                        raise ValueError(f"GitHub returned HTTP {resp.status_code}")
+                    comment = resp.json()
                 if (comment["html_url"] != url or instant(comment["created_at"]) != instant(comment["updated_at"])
                         or not isinstance(comment["body"], str)):
                     raise ValueError("Comment was changed or its URL does not match")
@@ -71,14 +104,24 @@ def audit_public(ledger, session=None):
     reg_ok = False
     try:
         try:
+            if expected_issue:
+                inventory = read_inventory()
+                if not reg_evidence and not any(r.get("evidence") for r in ledger.get("records",[])) and not any(
+                        c.get("body","").startswith("EPL T-24h · SHA-256") for c in inventory.values()):
+                    return {"ok":True,"registration_ok":False,"forecasts":{},"verified":0,
+                            "checked_at":datetime.now(timezone.utc).isoformat(),"errors":[]}
             verify(reg_evidence.get("url"),reg_evidence.get("at"),"protocol "+reg_digest,canonical(reg))
+            if inventory is not None and inventory[reg_evidence["url"]].get("author_association") not in MAINTAINER:
+                raise ValueError("Protocol witness must be published by a repository maintainer")
             if not reg:
                 raise ValueError("Missing registration")
             reg_ok = True
-        except (ValueError,TypeError) as exc:
+        except (ValueError,TypeError,KeyError,requests.RequestException) as exc:
             errors.append({"kind":"registration","error":str(exc)})
+            if expected_issue:
+                return {"ok":False,"registration_ok":False,"forecasts":{},"verified":0,"errors":errors}
         for row in ledger.get("records",[]):
-            if not row.get("payload"):
+            if not row.get("payload") or not row.get("evidence"):
                 continue
             p = row["payload"]
             try:
@@ -87,9 +130,20 @@ def audit_public(ledger, session=None):
                 if row["evidence"].split("#")[0] != reg_evidence["url"].split("#")[0]:
                     raise ValueError("Forecast witness is in a different issue")
                 verify(row["evidence"],row["witnessed"],"forecast "+row["hash"],canonical(_summary(p)))
+                if inventory is not None and inventory[row["evidence"]]["user"]["id"]!=inventory[reg_evidence["url"]]["user"]["id"]:
+                    raise ValueError("Forecast published by a different registration identity")
                 verified[row["hash"]] = {"url":row["evidence"],"at":row["witnessed"]}
             except (ValueError,KeyError,TypeError,AttributeError) as exc:
                 errors.append({"kind":"forecast","id":row.get("id"),"error":str(exc)})
+        if inventory is not None and reg_ok:
+            author = inventory[reg_evidence["url"]]["user"]["id"]
+            announced = set()
+            for c in inventory.values():
+                if c["user"]["id"]!=author or not c["body"].startswith("EPL T-24h · SHA-256\n\n"):
+                    continue
+                announced.update(line[9:] for line in c["body"].splitlines()[2::2] if line.startswith("forecast "))
+            if announced!=set(verified):
+                errors.append({"kind":"inventory","error":"Published forecast hashes do not match the snapshot"})
     finally:
         if session is None:
             client.close()
@@ -100,7 +154,9 @@ def audit_public(ledger, session=None):
 
 def audit_and_store(root=None, session=None):
     from .evaluation import public_ledger
-    report = audit_public(public_ledger(root),session=session)
+    from .snapshot import expected_issue
+    report = audit_public(public_ledger(root),session=session,expected_issue=expected_issue(),
+                          as_of=datetime.now(timezone.utc))
     with database(root) as db:
         write_value(db,"public_audit",report)
     return report

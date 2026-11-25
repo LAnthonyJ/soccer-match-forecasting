@@ -265,6 +265,10 @@ def collect(matches, predict, root=None, *, clock=lambda: datetime.now(UTC), get
         count, why = 0, reason
         for cutoff, match in due:
             key = _fixture_key(match)
+            if match.get("source_conflict"):
+                why = "source_conflict"
+                _reason(db,key,received,why)
+                continue
             if db.execute("SELECT 1 FROM captures WHERE fixture=? AND kickoff=? AND revision=? AND payload IS NOT NULL",
                           key).fetchone():
                 continue  # another process finished while the HTTP request was in flight

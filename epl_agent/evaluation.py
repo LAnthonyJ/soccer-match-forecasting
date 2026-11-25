@@ -110,7 +110,7 @@ def _valid_capture(m, row, reg, witness, now):
         return False
 
 
-def formal_report(fixtures, ledger, now=None):
+def _cohort_report(fixtures, ledger, now, years, *, official):
     now = now or datetime.now(timezone.utc)
     reg = ledger["registration"]
     all_records = ledger["records"]
@@ -118,13 +118,14 @@ def formal_report(fixtures, ledger, now=None):
     record_counts = Counter((r["id"],r["kickoff"],r["revision"]) for r in all_records)
     fixtures = list(fixtures)
     fixture_counts = Counter(m["id"] for m in fixtures)
-    years = reg["seasons"] if reg else []
     witness = ledger.get("registration_evidence")
     reg_ok = _registered(reg,witness)
     audit = ledger.get("public_audit") or {}
     audit_bound = bool(reg_ok and audit.get("registration_ok") and audit.get("registration_hash")==digest(reg)
                        and audit.get("registration_evidence")==witness)
     externally_checked = 0
+    local_pairs = 0
+    details = []
     totals = Counter()
     finished = Counter()
     eligible = defaultdict(list)
@@ -135,32 +136,54 @@ def formal_report(fixtures, ledger, now=None):
             continue
         season = m["season"]
         totals[season] += 1
+        detail = {"id":m["id"],"home":m["home"],"away":m["away"],"season":season,
+                  "kickoff":m.get("kickoff_utc"),"actual":None,"status":"pending_result",
+                  "reason":"pending_result","a":None,"b":None,"market":None,"evidence":None}
+        cutoff = instant(m["kickoff_utc"])-timedelta(days=1) if m.get("kickoff_utc") else None
+        detail.update(cutoff=cutoff.isoformat() if cutoff else None,model_version=None)
+        details.append(detail)
+        def exclude(reason):
+            missing[reason] += 1
+            detail.update(status="excluded",reason=reason)
+        if not official and reg and cutoff and cutoff < instant(reg["created"]):
+            detail.update(status="outside_period",reason="before_registration")
+            continue
+        if m.get("source_conflict"):
+            exclude("source_conflict")
+            continue
         if m["hg"] is None or m["ag"] is None:
             continue
         if fixture_counts[m["id"]]!=1:
-            missing["duplicate_fixture"] += 1
+            exclude("duplicate_fixture")
             continue
         if m.get("result_observed_at") and instant(m["result_observed_at"]) > now:
             continue
         finished[season] += 1
+        y = 0 if m["hg"]>m["ag"] else 2 if m["hg"]<m["ag"] else 1
+        detail["actual"] = "HDA"[y]
         key = (m["id"],m["kickoff_utc"],m.get("schedule_revision",0))
         row = records.get(key)
         if record_counts[key] > 1:
-            missing["duplicate_capture"] += 1
+            exclude("duplicate_capture")
             continue
         if not row or not row["payload"]:
-            missing[row["reason"] if row else "no_matching_snapshot"] += 1
+            old_revision = any(r["id"]==m["id"] for r in all_records) if not row else False
+            exclude(row["reason"] if row else "rescheduled" if old_revision else "no_matching_snapshot")
             continue
         p = row["payload"]
         if not p.get("market") or not p.get("b"):
-            missing[row["reason"]] += 1
+            exclude(row["reason"])
             continue
         if not reg_ok or not _valid_capture(m,row,reg,witness,now):
-            missing["unverified_forecast"] += 1
+            exclude("unverified_forecast")
             continue
-        if audit_bound and audit.get("forecasts",{}).get(row["hash"])=={"url":row["evidence"],"at":row["witnessed"]}:
-            externally_checked += 1
-        y = 0 if m["hg"]>m["ag"] else 2 if m["hg"]<m["ag"] else 1
+        local_pairs += 1
+        if not audit_bound or audit.get("forecasts",{}).get(row["hash"])!={"url":row["evidence"],"at":row["witnessed"]}:
+            exclude("pending_audit")
+            continue
+        externally_checked += 1
+        detail.update(status="paired",reason="paired",a=p["a"],b=p["b"],market=p["market"],evidence=row["evidence"],
+                      model_version=p["model_version"])
         scored = {**p,"y":y,"home":m["home"],"away":m["away"]}
         eligible[season].append(scored)
         all_rows.append(scored)
@@ -176,13 +199,28 @@ def formal_report(fixtures, ledger, now=None):
                       if m["season"] in years and m.get("kickoff_utc")]
     preregistered = bool(reg_ok and season_cutoffs and instant(witness["at"]) <= min(season_cutoffs))
     verification = {"registration_local":reg_ok,"registration_public":audit_bound,
-                    "before_first_fixture":preregistered,"local_pairs":len(all_rows),"public_pairs":externally_checked,
+                    "before_first_fixture":preregistered,"local_pairs":local_pairs,"public_pairs":externally_checked,
+                    "pending_pairs":local_pairs-externally_checked,
                     "audited_at":audit.get("checked_at")}
-    leading = (complete and preregistered and audit_bound and externally_checked==len(all_rows) and all(s["coverage"]>=.9 for s in seasons)
+    leading = (official and complete and preregistered and audit_bound and audit.get("ok") is True
+               and externally_checked==local_pairs and all(s["coverage"]>=.9 for s in seasons)
                and delta is not None and delta>=.005 and ci and ci[0]>0)
     return {"status":"leading" if leading else "unproven" if complete else "accumulating",
-            "n_pairs":len(all_rows),"seasons":seasons,"delta":delta,"ci":ci,
+            "n_pairs":len(all_rows),"seasons":seasons,"delta":delta,"ci":ci,"rows":details,
             "missing":dict(missing),"scores":{k:metrics(all_rows,k) for k in ("a","market","b")},
             "health":ledger["health"],"as_of":now.isoformat(),"verification":verification,
             "collection":{"fixtures":len(records),"paired":sum(bool(r["payload"] and r["payload"].get("b")) for r in records.values())},
             "worst":sorted(all_rows,key=lambda r:r["b"][r["y"]])[:10]}
+
+
+def formal_report(fixtures, ledger, now=None):
+    now = now or datetime.now(timezone.utc)
+    fixtures = list(fixtures)
+    reg = ledger.get("registration")
+    years = reg["seasons"] if reg else []
+    report = _cohort_report(fixtures,ledger,now,years,official=True)
+    first = int(years[0][:4])-1 if years else None
+    pilot_years = [f"{first}-{str(first+1)[-2:]}"] if first else []
+    pilot = _cohort_report(fixtures,ledger,now,pilot_years,official=False)
+    report["pilot"] = {key:pilot[key] for key in ("n_pairs","rows","seasons","delta","ci","scores","missing","verification")}
+    return report

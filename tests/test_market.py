@@ -57,7 +57,8 @@ class MarketTests(unittest.TestCase):
                                          "url":"https://github.com/example/project/issues/1#issuecomment-1"}
         row.update(witnessed=self.now.isoformat(),evidence="https://github.com/example/project/issues/1#issuecomment-2")
         formal = formal_report([self.match],ledger,now=self.kick+timedelta(days=1))
-        self.assertEqual(formal["n_pairs"],1)
+        self.assertEqual(formal["n_pairs"],0)
+        self.assertEqual(formal["verification"]["pending_pairs"],1)
         self.assertEqual(formal["status"],"accumulating")
         self.match["schedule_revision"] += 1
         self.assertEqual(formal_report([self.match],ledger)["n_pairs"],0)

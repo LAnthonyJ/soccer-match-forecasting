@@ -47,23 +47,26 @@ export function Match({f,openAsk}:{f:Fixture;openAsk:(q:string)=>void}) {
           <ModelChart title="市场基准" probs={p.market} kind="market"/>
           <ModelChart title="融合模型 B" probs={p.b} kind="model-b"/>
         </div>
-        <p className="notice">{gap ? gap.model+'与市场的最大分歧为'+gap.side+'，相差 '+(Math.abs(gap.gap)*100).toFixed(1)+' 个百分点。' : '缺少同场、同时间的合格市场报价，暂缺市场对照。'}</p>
+        {gap ? <p className="notice">{gap.model}与市场的最大分歧为{gap.side}，相差 {(Math.abs(gap.gap)*100).toFixed(1)} 个百分点。</p> :
+          <details className="notice market-missing"><summary>缺少市场报价</summary><p>{f.market_note||'缺少同场、同时间的合格市场报价。'}</p></details>}
       </section>
       <section className="panel"><header className="section-head"><h3>比分与进球</h3><span>独立模型 A</span></header>
         <div className="scorelines">{p.top_scores.slice(0,3).map(([h,a,v])=><div key={h+'-'+a}><strong>{h} <i>:</i> {a}</strong><span>{pct(v)}</span></div>)}</div>
         <div className="xg"><span>预期进球</span><b>{num(p.xg[0],2)} <small>主队</small>　/　{num(p.xg[1],2)} <small>客队</small></b></div>
       </section>
-      {p.form?.home&&p.form.away&&<section className="panel"><header className="section-head"><h3>近期表现</h3><span>赛前场均数据</span></header>
+      {p.form?.home&&p.form.away&&<section className="panel"><header className="section-head"><h3>近期表现</h3><span>最近最多 8 场 · 4 场先验平滑</span></header>
         <div className="table-wrap"><table><thead><tr><th>球队</th><th>进球</th><th>失球</th><th>积分</th></tr></thead><tbody>
         {(['home','away'] as const).map(s=><tr key={s}><th>{nameOf(f,s)}</th><td>{num(p.form![s].gf,2)}</td><td>{num(p.form![s].ga,2)}</td><td>{num(p.form![s].points,2)}</td></tr>)}
         </tbody></table></div></section>}
       <details className="panel provenance" open><summary>预测依据</summary><dl>
         <div><dt>数据截止</dt><dd>{fmtTime(p.cutoff)}</dd></div><div><dt>模型版本</dt><dd>{p.model_version}</dd></div>
-        <div><dt>球队样本数 · 主 / 客</dt><dd>{p.samples?.join(' / ') || '暂无'}</dd></div>
-        <div><dt>预测来源</dt><dd>{p.source==='replay'?'按历史时间重建':p.source==='frozen'?'赛前冻结快照':'最新可用资料预览'}</dd></div>
-      </dl>{p.source==='replay'&&<p className="muted">历史回放仅使用当时可用的比赛结果；市场领先评测另计前瞻样本。</p>}</details>
+        <div><dt>累计英超样本 · 主 / 客</dt><dd>{p.samples?.join(' / ') || '暂无'}</dd></div>
+        <div><dt>预测来源</dt><dd>{p.source==='preview'?'按当前资料预览':p.source==='frozen'?'赛前冻结快照':'按历史时间重建'}</dd></div>
+      </dl>{f.explanation&&<p className="muted explanation">{f.explanation}</p>}
+      {f.evidence&&<a className="ledger" href={f.evidence} target="_blank" rel="noopener">核对赛前公开见证 ↗</a>}</details>
       <button className="ask-strip" onClick={()=>openAsk('这场比赛模型为什么给出这样的概率？')}>询问这场比赛的预测依据 <span aria-hidden="true">↗</span></button>
-    </>:<section className="panel"><h3>暂无合格预测</h3><p className="muted">这场比赛的赛程或赛前资料尚未满足预测条件。</p></section>}
+    </>:<section className="panel"><h3>暂无合格预测</h3><p className="muted">{f.market_note||'这场比赛的赛程或赛前资料尚未满足预测条件。'}</p></section>}
+    {Boolean(f.source_conflict)&&<p className="notice">两个数据源对赛果的记录不同，本场暂停结算。</p>}
     {f.hg!=null&&f.ag!=null&&<section className="result"><span>赛后结果</span><button aria-expanded={reveal} onClick={()=>setReveal(!reveal)}>{reveal?'隐藏赛果':'查看真实赛果'}</button>
       {reveal&&<strong>{nameOf(f,'home')} {f.hg} – {f.ag} {nameOf(f,'away')}</strong>}</section>}
   </article>

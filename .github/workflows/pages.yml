@@ -1,30 +1,86 @@
 name: Publish replay dashboard
 on:
   workflow_dispatch:
+  push:
+    branches: [main, epl-v1]
+  schedule:
+    - cron: "23 */3 * * *"
 permissions:
   contents: read
+  issues: read
   pages: write
   id-token: write
 concurrency:
   group: pages
   cancel-in-progress: false
+
 jobs:
   publish:
+    env:
+      EXPECTED_ISSUE: ${{ github.repository == 'LAnthonyJ/worldcup_prediction' && '1' || vars.EPL_EVIDENCE_ISSUE }}
+    runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
       - run: python -m pip install -c requirements.lock .
-      - run: python -m epl_agent export site
+      - name: Resolve one public data commit
+        id: data
+        run: |
+          set -euo pipefail
+          head=$(git ls-remote --heads "https://github.com/${GITHUB_REPOSITORY}.git" refs/heads/public-data)
+          sha="${head%%[[:space:]]*}"
+          if [[ -f .github/epl-public-data-sha ]]; then
+            [[ -n "$sha" ]] || { echo 'Previously published data branch is missing'; exit 1; }
+            sha=$(cat .github/epl-public-data-sha)
+          fi
+          if [[ -n "$sha" ]]; then
+            [[ "$sha" =~ ^[0-9a-f]{40}$ && "$EXPECTED_ISSUE" =~ ^[1-9][0-9]*$ ]] || { echo 'A public-data commit and the expected evidence issue are required together'; exit 1; }
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Read public inputs at pinned SHA
+        if: steps.data.outputs.sha != ''
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.data.outputs.sha }}
+          path: incoming
+          persist-credentials: false
+          sparse-checkout: |
+            /snapshot.json
+          sparse-checkout-cone-mode: false
+      - name: Verify witnesses, rebuild scores and export official site
+        if: steps.data.outputs.sha != ''
+        env:
+          EPL_EVIDENCE_REPO: ${{ github.repository }}
+          EPL_EVIDENCE_ISSUE: ${{ env.EXPECTED_ISSUE }}
+          EPL_AUDIT_GITHUB_TOKEN: ${{ github.token }}
+          SNAPSHOT_SHA: ${{ steps.data.outputs.sha }}
+        run: |
+          python -m epl_agent export site --snapshot incoming
+          echo "$SNAPSHOT_SHA" > site/public-data-commit.txt
+      - name: Build standalone historical demo
+        if: steps.data.outputs.sha == ''
+        env:
+          EPL_AUDIT_GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          if [[ -n "$EXPECTED_ISSUE" ]]; then
+            export EPL_EVIDENCE_REPO="$GITHUB_REPOSITORY" EPL_EVIDENCE_ISSUE="$EXPECTED_ISSUE"
+            python -m epl_agent snapshot export "${RUNNER_TEMP}/initial-data"
+            python -m epl_agent export site --snapshot "${RUNNER_TEMP}/initial-data"
+          else
+            python -m epl_agent export site
+          fi
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
-      - name: Deploy
+      - name: Deploy checked site
         id: deployment
         uses: actions/deploy-pages@v4

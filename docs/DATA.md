@@ -37,6 +37,24 @@ Local observation fields distinguish clocks used for different questions:
 
 `load_matches(path, as_of=cutoff)` overlays the last locally observed version at or before a UTC cutoff onto the pinned reconstruction. Bundled historical rows do not claim a verified observation time. Retroactively downloading a file cannot establish what the market or a predictor knew before a match. The code and scorecard use separate reconstructed and prospective cohorts.
 
+## Current-season result supplement
+
+The worker fetches the full English top division from the two public providers once per scheduled sync. Openfootball supplies canonical clubs, rounds and kickoff times. OpenLigaDB supplies supplementary final scores. Its season shortcut is `pl` and the season identifier is the starting year. Only an exact season, home club and away club match can supply a missing result. A result needs the provider's finished flag and one valid `After90Minutes` record. Halftime scores, incomplete results and previously unseen pairings do not settle fixtures. A partial secondary response leaves the existing fixture list intact. [OpenLigaDB API examples](https://github.com/OpenLigaDB/OpenLigaDB-Samples) · [API terms of use](https://www.openligadb.de/en/terms-of-use)
+
+Each normalized source observation includes a fixture ID, revision and local receipt time. The SQLite cache records changes transactionally. When a provider is offline its previous observations remain available and the sync reports the failed attempt. The board counts a fixture as overdue when its verified kickoff is more than 24 hours in the past and a settled score is missing. Recent successful sync time and latest scored match date measure different things. The latter is the date on the canonical schedule.
+
+When upgrading an existing installation, restart the worker with the installed v1 package. The first v1 sync adds a SQLite trigger to protect merged fixtures from being overwritten by an older worker. A rejected legacy write leaves the latest committed results available to readers.
+
+If both providers report different final scores, the canonical score is left pending. Both reports and earlier settled versions remain inspectable. Agreement in a later observation resolves the conflict from that observation onward. A maintainer can also select a reported result using a public source and a written reason. From the repository or installed environment, run the following command with the actual ID and public evidence for the disputed match.
+
+```console
+python -m epl_agent.source_sync resolve SEASON FIXTURE_ID --prefer openfootball --evidence HTTPS_EVIDENCE_URL --note "Reason for the correction"
+```
+
+`--prefer` accepts `openfootball` or `openligadb`. The decision is bound to the two disputed scores. If either changes, the decision is re-evaluated and a new disagreement requires new evidence. The resolution time is recorded locally. Previously frozen predictions retain their original inputs.
+
+The historical archive remains available under CC0. Current-season data incorporating OpenLigaDB is credited to OpenLigaDB and the combined downloadable database is distributed separately under ODbL 1.0. Its normalized records contain the match and source fields needed to reproduce the merge. Club images, provider credentials and bookmaker prices are outside that export. OpenLigaDB is community-maintained and offers no completeness or freshness guarantee. [OpenLigaDB data license](https://www.openligadb.de/en/license) · [ODbL 1.0 text](https://opendatacommons.org/licenses/odbl/1-0/)
+
 ## Market data
 
 Users can capture new EPL quotes using their own free key. The operator retains raw quotes locally. Only derived predictions, summaries and model evaluation material are eligible for public export under [The Odds API terms](https://the-odds-api.com/terms-and-conditions.html). The package contains no bookmaker feed, commercial warehouse, scraped Football-Data CSV or credentials.
@@ -46,3 +64,5 @@ Users can capture new EPL quotes using their own free key. The operator retains 
 仓库附带 26 个完整英超赛季共 9,880 场真实比分，另附 2026/27 赛季的固定版本赛程。每季都核对了球队数、380 组主客对阵、比分、重复及缺失。开放比分采用 CC0；代码采用项目的 MIT 许可。无需密钥即可离线使用。上面的来源清单记录了原始文件版本及校验值。
 
 同步命令记录本机首次看到赛程及其修订的 UTC 时间。历史包用于重建赛前特征，正式市场比较只使用带有实际赛前观测证据的前瞻记录。
+
+当季同步会使用 OpenLigaDB 的常规时间终场比分补缺。主客队和赛季须精确对应。两源比分冲突时暂停结算。看板分别显示比分覆盖日期、同步成功时间和开球超过 24 小时仍待补的场数。合并数据库按 ODbL 1.0 署名分发，原始 CC0 历史比分可以独立使用。

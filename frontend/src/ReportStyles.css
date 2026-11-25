@@ -1,0 +1,20 @@
+.rp-toolbar,.rp-cal-controls{display:flex;gap:12px;flex-wrap:wrap;align-items:end;margin:16px 0}
+.rp-toolbar label,.rp-cal-controls label{display:grid;gap:5px;font-size:12px;color:var(--muted);font-weight:600}
+.rp-toolbar select,.rp-cal-controls select{color:var(--ink);font-size:13px;background:var(--paper);border:1px solid var(--line);border-radius:6px;padding:7px 10px;max-width:100%}
+.rp-switch{display:inline-flex;flex-wrap:wrap;gap:3px;background:#edf1e9;padding:3px;border-radius:8px}
+.rp-switch button,.rp-pages button{font-size:12px;border-radius:5px;padding:7px 10px;color:#3e5851}
+.rp-switch button[aria-pressed=true]{background:var(--ink);color:white}
+.rp-metrics{grid-template-columns:repeat(auto-fit,minmax(105px,1fr))}
+.rp-calibration{display:grid;grid-template-columns:minmax(120px,.8fr) minmax(220px,1.2fr);gap:20px;align-items:start}
+.rp-cal-controls{display:grid;align-items:start;justify-items:start}
+.rp-chart{display:block;width:100%;max-width:510px;height:auto;margin-top:12px}
+.rp-chart text{font:10px system-ui;fill:var(--muted)}.rp-grid{fill:none;stroke:#dfe6df;stroke-width:.6}
+.rp-diagonal{stroke:#71877e;stroke-width:1.2;stroke-dasharray:4 3}.rp-series{fill:none;stroke:var(--green);stroke-width:2}
+.rp-dot{fill:var(--paper);stroke:var(--green);stroke-width:1.8}.rp-bins summary{cursor:pointer;font-size:12px;font-weight:600;padding:8px 0;color:var(--green)}
+.rp-download,.rp-pages button{background:#eaf2e7;color:#245f45;padding:8px 12px;border-radius:6px;font-size:12px;font-weight:650}
+.rp-download:disabled,.rp-pages button:disabled{opacity:.55;cursor:default}
+.rp-summary,.rp-pages span{font-size:12px;color:var(--muted)}.rp-match,.rp-link{font-weight:650;text-align:left;color:#215f47;text-decoration:underline;text-underline-offset:3px}
+.rp-match{padding:4px 0;font-size:inherit}.rp-match span{font-weight:400;color:var(--muted)}.rp-record-table td,.rp-record-table th{white-space:nowrap}
+.rp-pages{display:flex;align-items:center;justify-content:end;gap:12px}
+.rp-files{display:flex;flex-wrap:wrap;gap:8px 16px;margin:12px 0 0}.rp-files a{font-size:13px;color:#215f47;text-decoration:underline;text-underline-offset:3px}
+@media(max-width:650px){.rp-calibration{display:block}.rp-toolbar{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px}.rp-cal-controls{grid-template-columns:1fr;gap:6px}.rp-cal-controls p{margin-top:0}.rp-download,.rp-switch button{padding:7px 8px}}

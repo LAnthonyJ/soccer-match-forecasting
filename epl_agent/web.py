@@ -35,6 +35,10 @@ def create_app():
     def ledger():
         return jsonify(public_ledger())
 
+    @app.get("/api/history-rows")
+    def history_rows():
+        return jsonify(service.historical_rows())
+
     @app.post("/api/ask")
     def ask():
         body = request.get_json(silent=True)

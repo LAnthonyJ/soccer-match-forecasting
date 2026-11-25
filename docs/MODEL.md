@@ -14,14 +14,20 @@ The published output covers regulation-time home win, draw and away win, in that
 
 The first two seasons warm up the model. Subsequent forecasts use an expanding calendar with annual parameter refits and club state updates from eligible results before each forecast. Reproductions read the same input commit and model dependencies. Native numerical libraries on different platforms can introduce small floating-point differences. The packaged model contains the frozen values used by the demo.
 
-| Metric on 9,170 rolling historical EPL predictions | Value |
-|---|---:|
-| A mean log loss | 0.9837 |
-| Elo mean log loss | 0.9964 |
-| A multiclass Brier (sum across three outcomes) | 0.5856 |
-| A highest-probability outcome correct | 53.29% |
+| Model on the same 9,170 rolling historical EPL fixtures | Mean log loss ↓ | Multiclass Brier ↓ | Highest-probability outcome correct |
+|---|---:|---:|---:|
+| Elo | 0.9964 | 0.5883 | 53.78% |
+| Dixon–Coles | 0.9862 | 0.5878 | 52.63% |
+| Gradient boosting | 0.9849 | 0.5859 | 53.49% |
+| Calibrated blend A | 0.9837 | 0.5856 | 53.29% |
 
-The sample includes 24 full seasons following warmup and 50 resolved games from the pinned 2026/27 file. The data release contains 9,880 results over the 26 preceding complete seasons. See [data provenance](DATA.md). Calibration bins pool all three one-vs-rest probabilities; the report also includes coverage by season and the hardest individual forecasts. Historical scores measure model A and Elo. A comparison to market prices requires the separate paired ledger.
+The sample includes 24 full seasons following warmup and 50 resolved games from the pinned 2026/27 file. The data release contains 9,880 results over the 26 preceding complete seasons. See [data provenance](DATA.md).
+
+Each fixture's features use scores available at its prediction cutoff. Each annual parameter fit and validation uses the most recent eligible score for each training fixture at that fit's cutoff. Scoring uses settled results visible at the report cutoff. Local observations include corrections, withdrawn fixtures and restored fixtures. A score correction can change the assigned outcome and loss. Previously frozen forecast payloads retain their probabilities and digest. A schedule revision first seen after its own cutoff is counted as unavailable for that replay. The pinned archive provides historical reconstructions for periods before local monitoring began.
+
+The report compares Elo, raw Dixon–Coles, the unblended gradient boosting classifier and calibrated model A on the intersection of matches with all four outputs. Each season reports the common count, each model's missing count, natural log loss, multiclass Brier score and accuracy. The 10 fixed-width calibration bins show the mean forecast probability, observed frequency and match count separately for home, draw and away outcomes. The previous pooled calibration series remains available for old clients. Downloadable historical rows identify the fixture, individual model probabilities, forecast cutoff and version, and scoring outcome. Prospective market comparisons use the witnessed ledger.
+
+The independent numerical reference uses the [penaltyblog 1.13.2 release](https://pypi.org/project/penaltyblog/1.13.2/). With home and away scoring rates 1.7 and 1.1, dependence parameter −0.08 and goals 0 through 20 per side, its normalized Dixon–Coles grid gives home/draw/away probabilities 0.504928215801, 0.258319500681 and 0.236752283519. The regression suite checks these and the four low-score cells at an absolute tolerance of 1e−13. The reference is recorded in the test suite so an offline installation can verify it.
 
 ## Market model B and challenger
 

@@ -73,6 +73,22 @@ async function layout(page,width,filename){
     await page.screenshot({path:path.join(snapshots,filename+'.png')})
   }
 }
+test('local and Pages show the same match explanation and last full season',async t=>{
+  const replies=[]
+  for(const url of [live,pages]){
+    const page=await makePage(t,360,url)
+    await page.getByRole('button',{name:'看本轮'}).click()
+    await page.getByRole('button',{name:'体验历史回放'}).click()
+    await page.getByRole('button',{name:/询问这场比赛的预测依据/}).click()
+    const reply=page.locator('.reply')
+    await reply.filter({hasText:'4 场联赛先验'}).waitFor()
+    const text=await reply.innerText()
+    await page.getByRole('button',{name:'过去一季模型比市场好吗？'}).click()
+    await reply.filter({hasText:'无法判断'}).waitFor()
+    replies.push([text,await reply.innerText()])
+  }
+  assert.deepEqual(replies[0],replies[1])
+})
 for(const width of [360,768,1440]) test('live replay and navigation at '+width,async t=>{
   const page=await makePage(t,width,live)
   await layout(page,width,width===1440?'matchdesk-desktop':width===360?'matchdesk-mobile':'')
@@ -155,4 +171,56 @@ test('network failure can be retried; supplied comparison uses percentage points
   await page.getByText(/相差 5.0 个百分点/).waitFor()
   assert.match(await page.locator('.chart-row.market').innerText(),/35.0%/)
   assert.match(await page.locator('.chart-row.model-b').innerText(),/40.0%/)
+})
+
+test('report filters a real season, separates draw calibration and downloads the selected matches',async t=>{
+  const page=await makePage(t,768,pages)
+  await page.getByRole('link',{name:'模型成绩'}).click()
+  await page.getByLabel('诊断赛季').selectOption('2024-25')
+  await page.getByLabel('校准模型').selectOption('dc')
+  await page.getByRole('button',{name:'平局',exact:true}).click()
+  await page.getByText('平局分箱明细',{exact:true}).click()
+  const bins=page.locator('.rp-bins tbody tr')
+  assert.equal(await bins.count(),10)
+  const counts=await bins.locator('td:last-child').allTextContents()
+  assert.equal(counts.reduce((n,x)=>n+Number(x),0),380)
+  await page.getByLabel('记录赛季').selectOption('2024-25')
+  await page.getByLabel('场次筛选').selectOption('worst')
+  const records=page.locator('.rp-record-table tbody tr')
+  assert.equal(await records.count(),10)
+  const down=page.waitForEvent('download')
+  await page.getByRole('button',{name:/下载当前筛选 CSV/}).click()
+  const file=await down
+  assert.equal(file.suggestedFilename(),'epl-history-2024-25.csv')
+  const lines=(await readFile(await file.path(),'utf8')).trim().split(/\r?\n/)
+  assert.equal(lines.length,11)
+  assert.match(lines[0],/"a_D"/)
+  assert.ok(lines.slice(1).every(x=>x.includes('"2024-25"')))
+  await records.first().getByRole('button').click()
+  await page.getByRole('heading',{name:'胜平负预测'}).waitFor()
+  await layout(page,768)
+})
+test('report drills from a witnessed pilot example to per-match scores, exclusions and replication inputs',async t=>{
+  const page=await makePage(t,1440,pages)
+  await page.route('**/dashboard.json',async route=>{
+    const response=await route.fetch(), data=await response.json()
+    const m=data.fixtures.find(f=>f.prediction&&f.hg!==null)
+    const base={id:m.id,season:m.season,home:m.home,away:m.away,kickoff:m.kickoff_utc}
+    const paired={...base,status:'paired',reason:'paired',actual:'D',a:[.4,.35,.25],b:[.32,.39,.29],market:[.3,.4,.3],evidence:'https://github.com/test/test/issues/1#issuecomment-123'}
+    data.report.pilot={n_pairs:1,seasons:[],rows:[paired,{...base,id:'test-conflict',reason:'source_conflict',status:'excluded'}]}
+    data.public_snapshot=true
+    await route.fulfill({response,json:data})
+  })
+  await page.reload()
+  await page.getByRole('link',{name:'模型成绩'}).click()
+  const proof=page.locator('section').filter({has:page.getByRole('heading',{name:'首场公开核验'})})
+  assert.equal(await proof.getByRole('link',{name:/本场赛前公开见证/}).getAttribute('href'),'https://github.com/test/test/issues/1#issuecomment-123')
+  assert.match(await proof.locator('tbody tr').first().innerText(),/1\.0498/)
+  assert.equal(await proof.getByRole('link',{name:/预测快照 JSON/}).getAttribute('href'),'./snapshot.json')
+  await page.getByLabel('记录来源').selectOption('pilot')
+  await page.getByLabel('缺失原因或状态').selectOption('source_conflict')
+  assert.equal(await page.locator('.rp-record-table tbody tr').count(),1)
+  assert.match(await page.locator('.rp-record-table tbody tr').innerText(),/比分待核实/)
+  await proof.getByRole('button').click()
+  await page.getByRole('heading',{name:'胜平负预测'}).waitFor()
 })
