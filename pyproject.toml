@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools==80.9.0", "wheel==0.45.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "epl-prediction-agent"
+version = "0.1.0"
+description = "An open, offline-first Premier League forecasting and evaluation workbench"
+requires-python = ">=3.11,<3.14"
+readme = "README.md"
+license = "MIT"
+dependencies = [
+  "Flask==3.1.3", "requests==2.32.5", "numpy==2.3.3", "scipy==1.16.3",
+  "scikit-learn==1.7.2", "tzdata==2025.2",
+]
+
+[project.scripts]
+epl-agent = "epl_agent.__main__:main"
+
+[tool.setuptools]
+packages = ["epl_agent"]
+
+[tool.setuptools.package-data]
+epl_agent = ["assets/data/*", "assets/models/*", "static/*", "static/assets/*"]
