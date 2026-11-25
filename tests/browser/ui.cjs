@@ -86,20 +86,23 @@ for(const width of [360,768,1440])test('archive navigation and schedule intent a
     await page.getByLabel('赛季',{exact:true}).selectOption(year)
     const game=page.locator('button.fixture').first()
     await game.waitFor()
+    const [week]=await page.getByLabel('比赛周',{exact:true}).selectOption({index:year==='2002-03'?2:3})
     await game.click()
     await page.waitForURL(new RegExp('#/match/'+year+'_'))
-    return page.url()
+    return {url:page.url(),week}
   }
   const first=await openYear('2002-03'),second=await openYear('2003-04')
-  for(const [direction,url,year] of [['goBack',first,'2002-03'],['goForward',second,'2003-04']]){
+  for(const [direction,{url,week},year] of [['goBack',first,'2002-03'],['goForward',second,'2003-04']]){
     await page[direction]()
     await page.waitForFunction(({year,url})=>location.href===url&&document.querySelector('[aria-label="赛季"]').value===year,{year,url})
     await page.locator('.match-detail').waitFor()
+    assert.equal(await page.getByLabel('比赛周',{exact:true}).inputValue(),week)
     assert.match(await page.locator('.score-meta').innerText(),new RegExp(year.replace('-',' / ')))
   }
   await page.reload()
   await page.locator('.match-detail').waitFor()
   assert.equal(await page.getByLabel('赛季',{exact:true}).inputValue(),'2003-04')
+  assert.equal(await page.getByLabel('比赛周',{exact:true}).inputValue(),second.week)
   const future=await page.evaluate(async()=>{
     const data=await (await fetch('./board.json')).json()
     const season=await (await fetch('./seasons/'+data.health.season+'.json')).json()

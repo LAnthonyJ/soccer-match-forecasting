@@ -8,9 +8,10 @@ import './style.css'
 
 type View = 'matches'|'report'|'ask'
 function route() {
-  const [page,id='']=location.hash.replace(/^#\/?/,'').split('/')
+  const [path,query='']=location.hash.replace(/^#\/?/,'').split('?')
+  const [page,id='']=path.split('/')
   let decoded='';try{decoded=decodeURIComponent(id)}catch{/* invalid deep link */}
-  return {view:(page==='report'||page==='ask'?page:'matches') as View,id:page==='match'?decoded:''}
+  return {view:(page==='report'||page==='ask'?page:'matches') as View,id:page==='match'?decoded:'',week:new URLSearchParams(query).get('week')}
 }
 const tabs: [View,string][]=[['matches','比赛看板'],['report','模型成绩'],['ask','预测助手']]
 function Logo() {return <span className="brand"><i aria-hidden="true"><b/><b/><b/></i>英超观察台</span>}
@@ -23,14 +24,29 @@ function App() {
   const [browseAll,setBrowseAll]=useState(false),[report,setReport]=useState<Scores|null>(null),[reportError,setReportError]=useState(false),[reportTry,setReportTry]=useState(0)
   const [limit,setLimit]=useState(40),[mobile,setMobile]=useState<'list'|'detail'>('detail'),[initialAsk,setInitialAsk]=useState('')
   const [missingOnly,setMissingOnly]=useState(false)
+  const [restoreRound,setRestoreRound]=useState('')
   const listNode=useRef<HTMLDivElement>(null)
-  useEffect(()=>{const fn=()=>{const r=route();setNav(r);const year=r.id.match(/^(20\d\d-\d\d)_/)?.[1];if(year){setSeason(year);setChosen(r.id);setMobile('detail')}};window.addEventListener('hashchange',fn);return ()=>window.removeEventListener('hashchange',fn)},[])
+  function restoreMatch(fid:string) {
+    const year=fid.match(/^(20\d\d-\d\d)_/)?.[1]
+    if(!year)return
+    const saved=route().week
+    setSeason(year);setChosen(fid);setWeek(typeof saved==='string'?saved:'')
+    setRestoreRound(typeof saved==='string'?'':fid);setMobile('detail')
+    setMissingOnly(false);setQuery('')
+  }
+  useEffect(()=>{
+    const fn=()=>{const r=route();setNav(r);restoreMatch(r.id)}
+    window.addEventListener('hashchange',fn)
+    return ()=>window.removeEventListener('hashchange',fn)
+  },[])
   useEffect(()=>{
     const c=new AbortController();setFailure('')
     fetchBoard(c.signal).then(d=>{
       if(c.signal.aborted) return
       const first=d.fixtures.find(f=>f.id===route().id)||d.fixtures.find(f=>f.id===d.default_id)||d.fixtures[0]
-      setData(d);if(first){const linkSeason=route().id.match(/^(20\d\d-\d\d)_/)?.[1];setSeason(linkSeason||first.season);setWeek(linkSeason&&linkSeason!==first.season?'':weekOf(first));setChosen(first.id)}
+      setData(d)
+      if(route().id)restoreMatch(route().id)
+      else if(first){setSeason(first.season);setWeek(weekOf(first));setChosen(first.id)}
     }).catch(()=>{if(!c.signal.aborted) setFailure('比赛数据加载失败。请确认本地服务或静态数据包可访问。')})
     return ()=>c.abort()
   },[attempt])
@@ -43,6 +59,10 @@ function App() {
   const summary=useMemo(()=>matches.find(f=>f.id===id),[matches,id])
   const extra=detail?.id===id?detail:null
   const f=extra||(summary?.partial?undefined:summary)
+  useEffect(()=>{
+    const match=f||summary
+    if(restoreRound&&match?.id===restoreRound){setWeek(weekOf(match));setRestoreRound('')}
+  },[restoreRound,summary,f])
   const seasons=useMemo(()=>Array.from(new Set([...(data?.archive_seasons||data?.available_seasons||[]),...matches.map(x=>x.season),...(season?[season]:[])])).sort().reverse(),[matches,data,season])
   const needsAskSchedule=nav.view==='ask'&&isStatic()&&data?.compact
   const requestSeason=needsAskSchedule?data.health?.season||season:season
@@ -69,7 +89,6 @@ function App() {
       const entry:Fixture=d.fixture||d
       if(entry.id!==id)throw new Error()
       setDetail(entry)
-      if(!data.fixtures.some(x=>x.id===id)&&route().id===id){setSeason(entry.season);setWeek(weekOf(entry))}
     }).catch(()=>{if(!c.signal.aborted)setDetailError('无法更新比赛详情。')})
     return ()=>c.abort()
   },[id,data,retryDetail])
@@ -85,14 +104,20 @@ function App() {
     const distance=button.getBoundingClientRect().top-list.getBoundingClientRect().top
     if(distance<0||distance+button.offsetHeight>list.clientHeight)list.scrollTop+=distance
   },[id,week,season,data,mobile])
-  function select(fid:string) {setInitialAsk('');setChosen(fid);setMobile('detail');location.hash='/match/'+encodeURIComponent(fid)}
+  function select(fid:string,selectedWeek=week) {
+    const game=matches.find(m=>m.id===fid)
+    const filter=game&&season===game.season?selectedWeek:game?weekOf(game):undefined
+    const url='#/match/'+encodeURIComponent(fid)+(filter===undefined?'':'?week='+encodeURIComponent(filter))
+    if(location.hash!==url)history.pushState(null,'',url)
+    setNav(route());setInitialAsk('');restoreMatch(fid)
+  }
   function toPage(page:View) {setInitialAsk('');if(id)setChosen(id);location.hash=page==='matches'?(id?'/match/'+encodeURIComponent(id):'/matches'):'/'+page}
-  function selectSeason(s:string){setBrowseAll(true);setMissingOnly(false);setSeason(s);setWeek('');setQuery('');setLimit(40);setMobile('list')}
-  function changeWeek(value:string){setBrowseAll(true);setMissingOnly(false);setWeek(value);setQuery('');setLimit(40);setMobile('list')}
+  function selectSeason(s:string){setRestoreRound('');setBrowseAll(true);setMissingOnly(false);setSeason(s);setWeek('');setQuery('');setLimit(40);setMobile('list')}
+  function changeWeek(value:string){setRestoreRound('');setBrowseAll(true);setMissingOnly(false);setWeek(value);setQuery('');setLimit(40);setMobile('list')}
   function jump(fid?:string) {
     const game=matches.find(m=>m.id===fid)
     if(!game)return
-    setMissingOnly(false);setSeason(game.season);setWeek(weekOf(game));setQuery('');setLimit(40);select(game.id)
+    setMissingOnly(false);setSeason(game.season);setWeek(weekOf(game));setQuery('');setLimit(40);select(game.id,weekOf(game))
   }
   const scores=data?.compact?report:data?.report
   const title=tabs.find(([key])=>key===nav.view)![1]

@@ -122,6 +122,20 @@ def _review(game, stamp):
     return {"as_of":stamp,"facts":facts}
 
 
+def _archive_season(path, dest, stamp):
+    games = sorted(json.loads(path.read_bytes()), key=lambda game: game["id"])
+    with (dest/"archive"/path.name).open("w",encoding="utf8") as archive, \
+            (dest/"reviews"/path.name).open("w",encoding="utf8") as review:
+        archive.write("{")
+        review.write("{")
+        for index,game in enumerate(games):
+            key = ("," if index else "") + canonical(game["id"]) + ":"
+            archive.write(key + canonical(packet(game,stamp)))
+            review.write(key + canonical(_review(game,stamp)))
+        archive.write("}")
+        review.write("}")
+
+
 def export_assets(directory, dashboard):
     """Recent fixtures are addressable individually. Archived seasons share one small-file index each."""
     dest = Path(directory)/"analysis"
@@ -135,16 +149,13 @@ def export_assets(directory, dashboard):
         bundle = packet(game,stamp)
         (dest/"facts"/(game["id"]+".json")).write_text(canonical(bundle),encoding="utf8")
         reviews[game["season"]][game["id"]] = _review(game,stamp)
-    recent = {g["season"] for g in games}
+    recent = set(reviews)
+    for season, items in reviews.items():
+        (dest/"reviews"/(season+".json")).write_text(canonical(items),encoding="utf8")
     for path in sorted((Path(directory)/"seasons").glob("*.json")):
         if path.stem in recent or not re.fullmatch(r"20\d{2}-\d{2}",path.stem):
             continue
-        archived = json.loads(path.read_text("utf8"))
-        bundles = {g["id"]:packet(g,stamp) for g in archived}
-        (dest/"archive"/path.name).write_text(canonical(bundles),encoding="utf8")
-        reviews[path.stem] = {g["id"]:_review(g,stamp) for g in archived}
-    for season, items in reviews.items():
-        (dest/"reviews"/(season+".json")).write_text(canonical(items),encoding="utf8")
+        _archive_season(path,dest,stamp)
     current = next((g for g in games if g["id"]==dashboard.get("current_id")),None)
     ids = []
     if current:
