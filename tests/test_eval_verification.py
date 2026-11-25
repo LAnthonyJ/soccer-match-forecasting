@@ -1,5 +1,6 @@
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+import math
 import unittest
 from unittest.mock import Mock
 
@@ -83,6 +84,73 @@ class VerificationTests(unittest.TestCase):
         for field in ("evidence","witnessed","observed"):
             ledger["records"] = [dict(row,**{field:"bogus"})]
             self.assertEqual(formal_report([m],ledger,self.now)["n_pairs"],0)
+
+    def test_a_only_and_paired_share_independent_cohort(self):
+        ledger = self.ledger()
+        first, solo = self.row("2027-28",0,2)
+        second, pair = self.row("2027-28",1,3)
+        third, _ = self.row("2027-28",2,4)
+        solo.update(reason="no_api_key",market_reason="no_api_key")
+        solo["payload"].update(market=None,b=None)
+        solo["hash"] = digest(solo["payload"])
+        ledger["records"] = [solo,pair]
+        ledger["public_audit"] = {"ok":True,"registration_ok":True,"registration_hash":digest(self.reg),
+            "registration_evidence":ledger["registration_evidence"],
+            "forecasts":{r["hash"]:{"url":r["evidence"],"at":r["witnessed"]} for r in (solo,pair)}}
+        second["hg"],second["ag"] = 0,0
+        fixtures = [first,second,third]
+        report = formal_report(fixtures,ledger,self.now)
+        a = report["independent"]
+        self.assertEqual((a["n_scored"],a["eligible"],a["finished"],report["n_pairs"]),(2,3,3,1))
+        self.assertAlmostEqual(a["coverage"],2/3)
+        self.assertAlmostEqual(a["scores"]["log_loss"],-(math.log(.8)+math.log(.1))/2)
+        self.assertAlmostEqual(a["scores"]["brier"],(.06+1.46)/2)
+        self.assertEqual(a["scores"]["accuracy"],.5)
+        self.assertEqual(a["rows"][0]["correct"],True)
+        self.assertEqual(a["rows"][0]["a"],[.8,.1,.1])
+        self.assertEqual(a["missing"],{"no_matching_snapshot":1})
+        self.assertEqual(a["seasons"][0]["n_scored"],2)
+        original_hash = solo["hash"]
+        first["source_conflict"] = "score_conflict"
+        self.assertEqual(formal_report(fixtures,ledger,self.now)["independent"]["n_scored"],1)
+        first.update(source_conflict=None,hg=0,ag=1)
+        rescored = formal_report(fixtures,ledger,self.now)["independent"]
+        self.assertEqual(rescored["scores"]["accuracy"],0.)
+        self.assertEqual(solo["hash"],original_hash)
+
+    def test_independent_requires_timely_matching_verified_public_evidence(self):
+        ledger = self.ledger()
+        fixture, row = self.row("2027-28",0,2)
+        row["payload"].update(market=None,b=None)
+        row.update(reason="insufficient_books",hash=digest(row["payload"]))
+        ledger["records"] = [row]
+        def detail():
+            return formal_report([fixture],ledger,self.now)["independent"]["rows"][0]
+        self.assertEqual(detail()["reason"],"pending_audit")
+        ledger["public_audit"] = {"ok":True,"registration_ok":True,"registration_hash":digest(self.reg),
+            "registration_evidence":ledger["registration_evidence"],
+            "forecasts":{row["hash"]:{"url":row["evidence"],"at":row["witnessed"]}}}
+        self.assertEqual(detail()["status"],"scored")
+        for fields, reason in (({"witnessed":None,"evidence":None},"missing_witness"),
+                               ({"witnessed":row["kickoff"]},"late_witness"),
+                               ({"hash":"arbitrary"},"unverified_forecast")):
+            with self.subTest(reason=reason):
+                ledger["records"] = [dict(row,**fields)]
+                self.assertEqual(detail()["reason"],reason)
+                self.assertIsNone(detail()["log_loss"])
+        ledger["records"] = [row,row]
+        self.assertEqual(detail()["reason"],"duplicate_capture")
+        ledger["records"] = [row]
+        fixture["schedule_revision"] += 1
+        self.assertEqual(detail()["reason"],"rescheduled")
+        fixture["schedule_revision"] -= 1
+        fixture.update(hg=None,ag=None)
+        self.assertEqual(detail()["status"],"pending_result")
+        self.assertIsNone(detail()["log_loss"])
+        fixture["hg"],fixture["ag"] = 1,0
+        row["payload"]["prediction"]["historical_reconstruction"] = True
+        row["hash"] = digest(row["payload"])
+        self.assertEqual(detail()["reason"],"unverified_forecast")
 
     def test_two_full_seasons_and_each_season_coverage_and_public_proof(self):
         fixtures = []

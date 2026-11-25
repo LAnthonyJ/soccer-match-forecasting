@@ -466,7 +466,21 @@ def _select_artifact(manifest, cutoff, version=None):
     return max(valid, key=lambda s: s["valid_from"])["version"]
 
 
-def forecast_many(targets, matches, cutoff=None, model_dir=None, version=None, *, versions=(), archive=None):
+@dataclass
+class ForecastContext:
+    source: _Versions
+    directory: Path
+    manifest: dict
+    artifacts: dict
+
+    @classmethod
+    def prepare(cls, matches, directory, *, versions=(), archive=None, version=None):
+        directory = Path(directory or MODEL_DIR)
+        artifacts = {version: _read(directory/(version+".json.gz"))} if version else {}
+        return cls(_Versions(matches, versions, archive), directory, _read(directory/"manifest.json"), artifacts)
+
+
+def forecast_many(targets, matches, cutoff=None, model_dir=None, version=None, *, versions=(), archive=None, context=None):
     """Forecast matching schedules in one observation sweep. None means each fixture's T−24h."""
     targets = list(targets)
     if not targets:
@@ -479,20 +493,17 @@ def forecast_many(targets, matches, cutoff=None, model_dir=None, version=None, *
         if when > boundary:
             raise ValueError("Forecast inputs must be frozen by T-24h")
         requested.append((when, match))
-    source = _Versions(matches, versions, archive)
-    features = source.features(requested)
-    path = Path(model_dir or MODEL_DIR)
-    manifest = _read(path/"manifest.json")
+    context = context or ForecastContext.prepare(matches, model_dir, versions=versions, archive=archive)
+    features = context.source.features(requested)
     now = datetime.now(UTC)
-    artifacts = {}
     out = {}
     for when, match in requested:
         if match["id"] not in features:
             continue
-        key = _select_artifact(manifest, when, version)
-        if key not in artifacts:
-            artifacts[key] = _read(path/(key+".json.gz"))
-        out[match["id"]] = _predict(match, features[match["id"]], artifacts[key], when,
+        key = _select_artifact(context.manifest, when, version)
+        if key not in context.artifacts:
+            context.artifacts[key] = _read(context.directory/(key+".json.gz"))
+        out[match["id"]] = _predict(match, features[match["id"]], context.artifacts[key], when,
                                     historical=not match.get("kickoff_utc") or _kickoff(match)-timedelta(days=1)<now)
     return out
 

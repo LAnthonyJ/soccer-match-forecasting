@@ -1,6 +1,6 @@
 from flask import Flask, abort, jsonify, request, send_from_directory
 
-from . import service
+from . import operations, service
 from .evaluation import public_ledger
 
 
@@ -16,6 +16,10 @@ def create_app():
     @app.get("/assets/<path:name>")
     def assets(name):
         return send_from_directory(service.STATIC/"assets",name)
+
+    @app.get("/api/status")
+    def status():
+        return jsonify(operations.local_status())
 
     @app.get("/api/dashboard")
     def dashboard():

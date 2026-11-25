@@ -174,10 +174,15 @@ def _secondary(season):
     return rows,_digest(rows)
 
 
-def synchronize(db_path, season):
+def synchronize(db_path, season, providers=None):
+    providers = tuple(LICENSES if providers is None else providers)
+    if not providers or set(providers) - LICENSES.keys():
+        raise ValueError("Unknown fixture source")
     batches = {}
     errors = {}
     for name, loader in ((PRIMARY,data._primary),(SECONDARY,_secondary)):
+        if name not in providers:
+            continue
         try:
             rows, rev = loader(season)
             if name == PRIMARY:
@@ -193,7 +198,8 @@ def synchronize(db_path, season):
     with closing(sqlite3.connect(path,timeout=15)) as db,db:
         _setup(db)
         db.execute("BEGIN IMMEDIATE")
-        for provider in LICENSES:
+        observed = data._utc(datetime.now(timezone.utc))
+        for provider in providers:
             batch = batches.get(provider)
             at = batch[1] if batch else observed
             latest = db.execute("SELECT MAX(attempted) FROM provider_attempts WHERE season=? AND provider=?",

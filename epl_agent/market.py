@@ -4,6 +4,8 @@ import json
 import math
 import os
 import sqlite3
+import uuid
+from collections import defaultdict
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -52,6 +54,7 @@ def database(root=None):
             CREATE TABLE IF NOT EXISTS captures (
                 fixture TEXT, kickoff TEXT, received TEXT, raw TEXT, reason TEXT, payload TEXT,
                 hash TEXT UNIQUE, evidence TEXT, witnessed TEXT, revision INTEGER NOT NULL,
+                freeze_reason TEXT, market_reason TEXT,
                 PRIMARY KEY(fixture,kickoff,revision));
             CREATE TABLE IF NOT EXISTS observations (
                 received TEXT NOT NULL,event TEXT NOT NULL,raw TEXT NOT NULL,PRIMARY KEY(received,event));
@@ -59,7 +62,17 @@ def database(root=None):
                 fixture TEXT NOT NULL, kickoff TEXT NOT NULL, revision INTEGER NOT NULL,
                 received TEXT NOT NULL, event TEXT NOT NULL, consensus TEXT NOT NULL,
                 PRIMARY KEY(fixture,kickoff,revision));
+            CREATE TABLE IF NOT EXISTS freeze_claims (
+                fixture TEXT, kickoff TEXT, revision INTEGER, owner TEXT NOT NULL, acquired TEXT NOT NULL,
+                PRIMARY KEY(fixture,kickoff,revision));
         """)
+        if "market_reason" not in {r[1] for r in db.execute("PRAGMA table_info(captures)")}:
+            db.execute("BEGIN IMMEDIATE")
+            fields = {r[1] for r in db.execute("PRAGMA table_info(captures)")}
+            for field in ("freeze_reason", "market_reason"):
+                if field not in fields:
+                    db.execute(f"ALTER TABLE captures ADD COLUMN {field} TEXT")
+            db.commit()
         yield db
         db.commit()
     finally:
@@ -149,10 +162,13 @@ def _record_missed(db, matches, now, registered):
         cutoff = instant(m["kickoff_utc"]) - timedelta(days=1)
         if registered <= cutoff < now:
             missed.append((*_fixture_key(m), now.isoformat()))
-    db.executemany("""INSERT INTO captures(fixture,kickoff,revision,received,reason)
-        VALUES(?,?,?,?,'missed_window') ON CONFLICT(fixture,kickoff,revision) DO NOTHING""", missed)
-    db.execute("""UPDATE captures SET reason='missed_window'
-        WHERE payload IS NULL AND reason='collecting_quotes' AND julianday(kickoff)-1 < julianday(?)""",
+    db.executemany("""INSERT INTO captures(fixture,kickoff,revision,received,reason,freeze_reason)
+        VALUES(?,?,?,?,'missed_window','missed_window') ON CONFLICT(fixture,kickoff,revision) DO NOTHING""", missed)
+    db.execute("""UPDATE captures SET freeze_reason='missed_window', reason='missed_window',
+        market_reason=COALESCE(market_reason, CASE WHEN reason IN
+          ('missing_api_key','quota_reserve','provider_unavailable','event_missing','insufficient_books') THEN reason END)
+        WHERE payload IS NULL AND COALESCE(freeze_reason,'pending_freeze')='pending_freeze'
+        AND julianday(kickoff)-1 < julianday(?)""",
                (now.isoformat(),))
 
 
@@ -172,12 +188,16 @@ def _index_events(events):
     return indexed
 
 
-def _poll(db, now, finalizing, clock, get):
+def _poll(db, now, finalizing, clock, get, seconds_left):
     token = os.getenv("ODDS_API_KEY")
     month = "quota:" + now.strftime("%Y-%m")
     remaining = read_value(db, month, 500)
     if not token or remaining <= 50:
         return {}, now, "missing_api_key" if not token else "quota_reserve"
+    # Leave time for the local model and the public witness even if the provider is slow.
+    timeout = min(10.0, (seconds_left - 20.0) / 2)
+    if timeout < 1:
+        return {}, now, "deadline_reserve"
     active = read_value(db,"active_request")
     if active and now-instant(active) < timedelta(seconds=45):
         return {}, now, "request_in_flight"
@@ -192,7 +212,7 @@ def _poll(db, now, finalizing, clock, get):
     events, reason, reported = [], "provider_unavailable", None
     try:
         res = get("https://api.the-odds-api.com/v4/sports/soccer_epl/odds",
-                  params={"apiKey":token,"regions":"uk","markets":"h2h","oddsFormat":"decimal"},timeout=10)
+                  params={"apiKey":token,"regions":"uk","markets":"h2h","oddsFormat":"decimal"},timeout=timeout)
         quota_header = res.headers.get("x-requests-remaining")
         if quota_header is not None and str(quota_header).isdigit():
             reported = max(0,int(quota_header))
@@ -233,17 +253,118 @@ def _remember_quote(db, key, event, received):
     return True
 
 
-def _reason(db, key, received, reason):
-    db.execute("""INSERT INTO captures(fixture,kickoff,revision,received,reason) VALUES(?,?,?,?,?)
-                  ON CONFLICT(fixture,kickoff,revision) DO UPDATE SET
-                  reason=excluded.reason, received=excluded.received WHERE captures.payload IS NULL""",
-               (*key,received.isoformat(),reason))
+def _reason(db, key, received, reason, *, freeze=None, market=None):
+    db.execute("""INSERT INTO captures(fixture,kickoff,revision,received,reason,freeze_reason,market_reason)
+                  VALUES(?,?,?,?,?,?,?) ON CONFLICT(fixture,kickoff,revision) DO UPDATE SET
+                  reason=excluded.reason, received=excluded.received, freeze_reason=excluded.freeze_reason,
+                  market_reason=excluded.market_reason WHERE captures.payload IS NULL""",
+               (*key, received.isoformat(), reason, freeze, market))
 
 
-def collect(matches, predict, root=None, *, clock=lambda: datetime.now(UTC), get=requests.get):
-    """Sample a shared league feed, then freeze once with a two-minute witness budget."""
+def _prepare(db, due, events, received, poll_reason, owner):
+    """Persist observations and claim work in one short transaction, before model I/O."""
     from .data import alias
+    groups = defaultdict(list)
+    reason = poll_reason
+    for cutoff, match in due:
+        key = _fixture_key(match)
+        if db.execute("SELECT 1 FROM captures WHERE fixture=? AND kickoff=? AND revision=? AND payload IS NOT NULL",
+                      key).fetchone():
+            continue
+        seen = match.get("schedule_observed_at")
+        if match.get("source_conflict"):
+            reason = "source_conflict"
+        elif not seen or instant(seen) > received:
+            reason = "schedule_unverified"
+        elif received > cutoff:
+            reason = "late_receipt"
+        else:
+            event = events.get((alias(match["home"]), alias(match["away"]), instant(key[1])))
+            good = _remember_quote(db, key, event, received)
+            market_reason = None if good else "insufficient_books" if event else poll_reason
+            candidate = db.execute("""SELECT q.received,q.consensus,o.raw FROM quote_candidates q
+                JOIN observations o ON o.received=q.received AND o.event=q.event
+                WHERE q.fixture=? AND q.kickoff=? AND q.revision=?""",key).fetchone()
+            # An obsolete quote must not suppress a still-eligible A-only freeze.
+            window_start = max(instant(seen), cutoff - timedelta(minutes=PROTOCOL["window_minutes"]))
+            if candidate and not window_start <= instant(candidate["received"]) <= received:
+                candidate = None
+                market_reason = "unverified_observation"
+            observed = instant(candidate["received"]) if candidate else received
+            if candidate:
+                market_reason = None
+            reason = market_reason or "collecting_quotes"
+            if received < cutoff-timedelta(minutes=PROTOCOL["freeze_lead_minutes"]):
+                _reason(db,key,received,reason,freeze="pending_freeze",market=market_reason)
+                continue
+            if window_start <= observed <= received:
+                # A killed process can be replaced during the same window. The owner check
+                # prevents a stale process from overwriting its replacement's work.
+                acquired = db.execute("""INSERT INTO freeze_claims VALUES(?,?,?,?,?)
+                    ON CONFLICT(fixture,kickoff,revision) DO UPDATE SET owner=excluded.owner,
+                    acquired=excluded.acquired WHERE julianday(freeze_claims.acquired)<=julianday(?)""",
+                    (*key,owner,received.isoformat(),(received-timedelta(seconds=20)).isoformat())).rowcount
+                if acquired:
+                    _reason(db,key,received,reason,freeze="pending_freeze",market=market_reason)
+                    groups[(cutoff, observed)].append((match, candidate, market_reason))
+                continue
+            reason = "unverified_observation"
+        _reason(db,key,received,reason,freeze=reason)
+    return groups, reason
+
+
+def _store_freeze(db, owner, reg, work, cutoff, observed, result, clock):
+    match, candidate, market_reason = work
+    key = _fixture_key(match)
+    db.execute("BEGIN IMMEDIATE")
+    if not db.execute("DELETE FROM freeze_claims WHERE fixture=? AND kickoff=? AND revision=? AND owner=?",
+                      (*key, owner)).rowcount:
+        db.commit()
+        return 0, "already_claimed"
+    frozen = clock()
+    if frozen > cutoff or frozen < observed:
+        reason = "late_generation"
+    elif not isinstance(result,dict):
+        reason = "prediction_error"
+    elif result.get("model_version") != reg["model"]:
+        reason = "model_version_changed"
+    else:
+        probs = result.get("probs")
+        if (isinstance(probs,(list,tuple)) and len(probs)==3
+                and all(type(p) in (float,int) and 0<p<1 for p in probs)
+                and math.isclose(sum(probs),1.0,abs_tol=1e-8)):
+            market = json.loads(candidate["consensus"]) if candidate else None
+            payload = {"id":key[0],"season":match["season"],"kickoff":key[1],
+                       "cutoff":cutoff.isoformat(),"observed":observed.isoformat(),
+                       "frozen":frozen.isoformat(),"model_version":reg["model"],
+                       "protocol_hash":digest(reg),"schedule_observed_at":match["schedule_observed_at"],
+                       "schedule_revision":key[2],"a":probs,"market":market,
+                       "b":[.8*m+.2*p for m,p in zip(market,probs)] if market else None,
+                       "prediction":result}
+            try:
+                text = canonical(payload)
+            except (TypeError, ValueError):
+                reason = "prediction_error"
+            else:
+                reason = "paired" if market else market_reason
+                changed = db.execute("""UPDATE captures SET received=?,reason=?,payload=?,hash=?,raw=?,
+                                    freeze_reason=NULL,market_reason=?
+                                    WHERE fixture=? AND kickoff=? AND revision=? AND payload IS NULL""",
+                                     (observed.isoformat(),reason,text,digest(payload),
+                                      candidate["raw"] if candidate else None,market_reason,*key)).rowcount
+                db.commit()
+                return changed, reason
+        else:
+            reason = "prediction_error"
+    _reason(db,key,frozen,reason,freeze=reason,market=market_reason)
+    db.commit()
+    return 0, reason
+
+
+def collect(matches, predict, root=None, *, predict_many=None, clock=lambda: datetime.now(UTC), get=requests.get):
+    """Sample the shared feed, then durably freeze each eligible fixture independently."""
     now = clock()
+    owner = uuid.uuid4().hex
     with database(root) as db:
         db.execute("BEGIN IMMEDIATE")
         reg = read_value(db, "registration")
@@ -257,71 +378,32 @@ def collect(matches, predict, root=None, *, clock=lambda: datetime.now(UTC), get
             _fixture_key(m)).fetchone()]
         if not due:
             return {"status":"no_due_fixtures","captured":0}
-        lead = timedelta(minutes=PROTOCOL["freeze_lead_minutes"])
-        finalizing = any(now >= t-lead for t,_ in due)
-        events, received, reason = _poll(db,now,finalizing,clock,get)
+        deadline = due[0][0]
+        finalizing = now >= deadline-timedelta(minutes=PROTOCOL["freeze_lead_minutes"])
+        events, received, reason = _poll(db,now,finalizing,clock,get,(deadline-now).total_seconds())
         if reason == "request_in_flight":
             return {"status":reason,"captured":0}
-        count, why = 0, reason
-        for cutoff, match in due:
-            key = _fixture_key(match)
-            if match.get("source_conflict"):
-                why = "source_conflict"
-                _reason(db,key,received,why)
-                continue
-            if db.execute("SELECT 1 FROM captures WHERE fixture=? AND kickoff=? AND revision=? AND payload IS NOT NULL",
-                          key).fetchone():
-                continue  # another process finished while the HTTP request was in flight
-            schedule_seen = match.get("schedule_observed_at")
-            if not schedule_seen or instant(schedule_seen) > received:
-                why = "schedule_unverified"
-                _reason(db,key,received,why)
-                continue
-            if received > cutoff:
-                why = "late_receipt"
-                _reason(db,key,received,why)
-                continue
-            event = events.get((alias(match["home"]),alias(match["away"]),instant(key[1])))
-            good = _remember_quote(db,key,event,received)
-            why = "collecting_quotes" if good else "insufficient_books" if event else reason
-            if received < cutoff-lead:
-                _reason(db,key,received,why)
-                continue
-            candidate = db.execute("""SELECT q.received,q.consensus,o.raw FROM quote_candidates q
-                JOIN observations o ON o.received=q.received AND o.event=q.event
-                WHERE q.fixture=? AND q.kickoff=? AND q.revision=?""",key).fetchone()
-            observed = instant(candidate["received"]) if candidate else received
-            market = json.loads(candidate["consensus"]) if candidate else None
-            raw = candidate["raw"] if candidate else None
-            if observed < instant(schedule_seen) or not cutoff-timedelta(minutes=15) <= observed <= received:
-                why = "unverified_observation"
-                _reason(db,key,received,why)
-                continue
-            result = predict(match,observed,reg["model"])
-            frozen = clock()
-            if frozen > cutoff or frozen < observed:
-                why = "late_generation"
-                _reason(db,key,received,why)
-                continue
-            if not result or result["model_version"] != reg["model"]:
-                why = "model_version_changed"
-                _reason(db,key,received,why)
-                continue
-            probs = result["probs"]
-            payload = {"id":key[0],"season":match["season"],"kickoff":key[1],
-                       "cutoff":cutoff.isoformat(),"observed":observed.isoformat(),
-                       "frozen":frozen.isoformat(),"model_version":result["model_version"],
-                       "protocol_hash":digest(reg),"schedule_observed_at":schedule_seen,
-                       "schedule_revision":key[2],"a":probs,"market":market,
-                       "b":[.8*m+.2*p for m,p in zip(market,probs)] if market else None,
-                       "prediction":result}
-            why = "paired" if market else why
-            db.execute("""INSERT INTO captures(fixture,kickoff,revision,received,reason,payload,hash,raw)
-                          VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(fixture,kickoff,revision) DO UPDATE SET
-                          received=excluded.received,reason=excluded.reason,payload=excluded.payload,
-                          hash=excluded.hash,raw=excluded.raw
-                          WHERE captures.payload IS NULL""",
-                       (*key,observed.isoformat(),why,canonical(payload),digest(payload),raw))
-            count += 1
-        write_value(db,"last_capture",{"at":received.isoformat(),"status":why,"fixtures":len(due)})
-        return {"status":why,"captured":count}
+        groups, reason = _prepare(db, due, events, received, reason, owner)
+        db.commit()
+        count = 0
+        for (cutoff, observed), group in groups.items():
+            predictions = None
+            if predict_many is not None:
+                try:
+                    predictions = predict_many([item[0] for item in group], observed, reg["model"])
+                except Exception:
+                    # Isolate the faulty fixture. Every other result is committed immediately.
+                    pass
+            for work in group:
+                match = work[0]
+                if predictions is None:
+                    try:
+                        result = predict(match, observed, reg["model"])
+                    except Exception:
+                        result = None
+                else:
+                    result = predictions.get(match["id"])
+                changed, reason = _store_freeze(db,owner,reg,work,cutoff,observed,result,clock)
+                count += changed
+        write_value(db,"last_capture",{"at":received.isoformat(),"status":reason,"fixtures":len(due)})
+        return {"status":reason,"captured":count}

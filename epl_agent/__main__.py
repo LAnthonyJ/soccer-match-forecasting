@@ -7,59 +7,15 @@ from pathlib import Path
 import shutil
 import sys
 import tempfile
-import time
 
 from . import data, models, service
 from .evaluation import formal_report, public_ledger
-from .market import canonical, collect, database, freeze_protocol, instant, root_dir
+from .market import canonical, instant, root_dir
+from . import operations
 
 
 def output(obj):
     print(json.dumps(obj, ensure_ascii=False, indent=2, allow_nan=False))
-
-
-def register():
-    now = datetime.now(timezone.utc)
-    path = Path(service.model_dir() or models.MODEL_DIR)
-    manifest = json.loads((path/"manifest.json").read_text("utf8"))
-    eligible = [s for s in manifest["seasons"] if instant(s["valid_from"])<=now]
-    if not eligible:
-        raise ValueError("No model available at this time")
-    with database() as db:
-        db.execute("BEGIN IMMEDIATE")
-        return freeze_protocol(db,eligible[-1]["version"],now)
-
-
-def capture(witness=False):
-    from .evidence import publish
-    from .market import read_value
-    register()
-    def post_pending():
-        try:
-            publish()
-            return None
-        except (OSError,ValueError) as exc:
-            return type(exc).__name__
-    with database() as db:
-        witnessed = read_value(db,"registration_evidence")
-    witness_error = post_pending() if witness and not witnessed else None
-    matches = service.fixtures()
-    def frozen_model(match,when,version):
-        dirs = [service.model_dir() or models.MODEL_DIR,models.MODEL_DIR]
-        dirs.extend(p.parent for p in sorted((root_dir()/"models").glob("*/.complete")))
-        for directory in dict.fromkeys(dirs):
-            if (directory/(version+".json.gz")).is_file():
-                return models.forecast(match,matches,when,model_dir=directory,version=version,**service.model_inputs())
-        return None
-    result = collect(matches,frozen_model)
-    if witness and not witness_error:
-        with database() as db:
-            pending = db.execute("SELECT 1 FROM captures WHERE hash IS NOT NULL AND evidence IS NULL LIMIT 1").fetchone()
-        if pending:
-            witness_error = post_pending()
-    if witness_error:
-        result["publication_error"] = witness_error
-    return result
 
 
 def export_site(directory, snapshot_dir=None):
@@ -74,6 +30,7 @@ def export_site(directory, snapshot_dir=None):
     index.write_text(index.read_text("utf8").replace('name="data-mode" content="server"',
                                         'name="data-mode" content="static"'),encoding="utf8")
     dashboard = service.dashboard(static=True,snapshot=verified)
+    (directory/"status.json").write_text(canonical(dashboard["operations"]),encoding="utf8")
     (directory/"dashboard.json").write_text(canonical(dashboard),encoding="utf8")
     (directory/"ledger.json").write_text(canonical(verified["ledger"] if verified is not None else public_ledger()),encoding="utf8")
     service.export_history_assets(directory,dashboard,snapshot=verified)
@@ -101,6 +58,16 @@ def main(argv=None):
     cap = commands.add_parser("capture"); cap.add_argument("--publish",action="store_true")
     worker = commands.add_parser("worker"); worker.add_argument("--publish",action="store_true")
     worker.add_argument("--publish-snapshot",action="store_true",help="Publish public-data independently of the collection loop")
+    worker.add_argument("--once",action="store_true",help="Run one collection and reconciliation pass")
+    commands.add_parser("status")
+    match_cmd = commands.add_parser("match").add_subparsers(dest="action",required=True)
+    trace = match_cmd.add_parser("trace")
+    trace.add_argument("fixture_id")
+    resolve = match_cmd.add_parser("resolve")
+    resolve.add_argument("fixture_id")
+    resolve.add_argument("--prefer",choices=("openfootball","openligadb"),required=True)
+    resolve.add_argument("--evidence",required=True)
+    resolve.add_argument("--note",required=True)
     commands.add_parser("ledger")
     commands.add_parser("witness")
     commands.add_parser("audit")
@@ -168,29 +135,26 @@ def main(argv=None):
             else:
                 output(report)
         elif args.command=="register":
+            from .freezing import register
             output(register())
         elif args.command=="capture":
+            from .freezing import capture
             output(capture(args.publish))
         elif args.command=="worker":
-            last_sync = float("-inf")
-            snapshot_job = None
-            snapshot_at = float("-inf")
-            while True:
-                if time.monotonic()-last_sync>=3600:
-                    try:
-                        data.sync(root_dir()/"fixtures.sqlite3")
-                    except Exception as exc:
-                        print("Fixture sync failed:",type(exc).__name__,file=sys.stderr,flush=True)
-                    last_sync = time.monotonic()
-                try:
-                    output(capture(args.publish or args.publish_snapshot))
-                except Exception as exc:
-                    print("Capture failed:",type(exc).__name__,file=sys.stderr,flush=True)
-                if args.publish_snapshot and time.monotonic()-snapshot_at>=3600 and (snapshot_job is None or snapshot_job.poll() is not None):
-                    import subprocess
-                    snapshot_job = subprocess.Popen([sys.executable,"-m","epl_agent","snapshot","publish",str(root_dir()/"public-export")])
-                    snapshot_at = time.monotonic()
-                time.sleep(60)
+            from .worker import run
+            summary = run(publish=args.publish,publish_snapshot_enabled=args.publish_snapshot,once=args.once)
+            output(summary)
+            if not summary["ok"]:
+                return 1
+        elif args.command=="status":
+            output(operations.local_status())
+        elif args.command=="match":
+            if args.action=="trace":
+                output(service.prediction(args.fixture_id)["trace"])
+            else:
+                from .source_sync import resolve
+                output(resolve(root_dir()/"fixtures.sqlite3",args.fixture_id.partition("_")[0],
+                               args.fixture_id,args.prefer,args.evidence,args.note))
         elif args.command=="ledger":
             output(public_ledger())
         elif args.command=="witness":
@@ -218,7 +182,11 @@ def main(argv=None):
                 verified = snapshot.verify(args.directory)
                 report = formal_report(verified["fixtures"],verified["ledger"],instant(verified["as_of"]))
                 output({"verified":True,"as_of":verified["as_of"],"formal_pairs":report["n_pairs"],
-                        "pilot_pairs":report["pilot"]["n_pairs"]})
+                        "pilot_pairs":report["pilot"]["n_pairs"],
+                        "independent":{key:{"n_scored":cohort["independent"]["n_scored"],
+                                            "scores":cohort["independent"]["scores"]}
+                                       for key,cohort in (("formal",report),("pilot",report["pilot"]))},
+                        "paired_scores":{"formal":report["scores"],"pilot":report["pilot"]["scores"]}})
             else:
                 summary = snapshot.export_bundle(args.directory)
                 if args.action=="publish":

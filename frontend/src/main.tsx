@@ -92,8 +92,18 @@ function App() {
         <button className="jump-live" disabled={!data.current_id} onClick={()=>jump(data.current_id)}>看本轮 <span aria-hidden="true">↗</span></button>
         <button className="jump-replay" onClick={()=>jump(data.default_id)}>体验历史回放</button></div>
         {data.health&&<div className="health-line"><span>最近成功同步 <b>{data.health.last_sync_at?fmtTime(data.health.last_sync_at):'尚无本地同步记录'}</b></span>
+        {data.operations&&<span>{data.operations.snapshot_at?'公开批次 '+fmtTime(data.operations.snapshot_at):
+          '采集机 '+({online:'在线',offline:'心跳超时',unknown:'尚无心跳'}[data.operations.worker_status]||'待确认')}</span>}
+        {data.operations?.snapshot_at&&Date.now()-Date.parse(data.operations.snapshot_at)>4*3600000&&<strong>公开批次已超过 4 小时</strong>}
+        {data.operations?.upload_sha&&data.operations.upload_sha!==data.operations.deployed_sha&&<span>上传批次等待上线核实</span>}
         <button aria-pressed={missingOnly} onClick={()=>{selectSeason(data.health!.season);setMissingOnly(!missingOnly)}}>待补 {data.health.overdue_count} 场</button>
-        {data.health.conflict_count>0&&<span>其中 {data.health.conflict_count} 场比分待核实</span>}</div>}</section>
+        {data.health.conflict_count>0&&<span>其中 {data.health.conflict_count} 场比分待核实</span>}</div>}
+        {Boolean(data.health?.sources?.length)&&<details className="source-health"><summary>来源与采集状态</summary>
+          {data.health!.sources!.map(source=><p key={source.provider}>{source.provider} · {source.status==='ok'?'已连通':source.status==='never'?'尚无连通记录':'最近请求失败'} · 上次成功 {fmtTime(source.last_success_at)}</p>)}
+          {data.operations?.heartbeat_at&&<p>批次内采集心跳 {fmtTime(data.operations.heartbeat_at)}</p>}
+          {data.operations?.next_cutoff&&<p>下个冻结截止 {fmtTime(data.operations.next_cutoff)}</p>}
+          {!!data.health?.overdue_count&&<p>已核实开球超过 24 小时仍有比分待补。</p>}
+        </details>}</section>
       <div className="mobile-tabs"><button aria-pressed={mobile==='list'} onClick={()=>setMobile('list')}>赛程列表</button><button aria-pressed={mobile==='detail'} onClick={()=>setMobile('detail')}>比赛详情</button></div>
       <div className={'workspace show-'+mobile}>
       <aside className="schedule"><div className="schedule-top"><div className="section-head"><h2>联赛赛程</h2><span>{season}</span></div>

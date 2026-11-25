@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { type Fixture, type Prediction, type Triple, fixtureStatus, nameOf, fmtTime, num, pct, sides, difference } from './data'
+import { type Fixture, type Prediction, type Triple, fixtureStatus, nameOf, fmtTime, num, pct, sides, difference, reasons } from './data'
 
 const clubColours: [RegExp,string,string][] = [
   [/arsenal/i,'#ca3741','ARS'],[/manchester city|man city/i,'#71add3','MCI'],[/liverpool/i,'#b93947','LIV'],
@@ -66,6 +66,18 @@ export function Match({f,openAsk}:{f:Fixture;openAsk:(q:string)=>void}) {
       {f.evidence&&<a className="ledger" href={f.evidence} target="_blank" rel="noopener">核对赛前公开见证 ↗</a>}</details>
       <button className="ask-strip" onClick={()=>openAsk('这场比赛模型为什么给出这样的概率？')}>询问这场比赛的预测依据 <span aria-hidden="true">↗</span></button>
     </>:<section className="panel"><h3>暂无合格预测</h3><p className="muted">{f.market_note||'这场比赛的赛程或赛前资料尚未满足预测条件。'}</p></section>}
+    {f.trace&&<details className="panel provenance"><summary>比赛时间线 · 赛程版本 {f.trace.revision}</summary>
+      <dl>{([['赛程确认',f.trace.schedule_at],['计划截止',f.trace.cutoff],['实际冻结',f.trace.frozen],
+        ['公开见证',f.trace.witnessed],['收到确认赛果',f.trace.result_at],['本批次结算截至',f.trace.score_as_of],
+        ['首次核实本版记录已上线',f.trace.deployed?.seen_at]] as const).map(([label,value])=>
+          <div key={label}><dt>{label}</dt><dd>{value?fmtTime(value):'暂无记录'}</dd></div>)}</dl>
+      {f.trace.freeze_reason&&<p>{reasons[f.trace.freeze_reason]||f.market_note||f.trace.freeze_reason}</p>}
+      {f.trace.witness_status==='late'&&<p className="notice">见证晚于截止时间，本场未计入前瞻成绩。</p>}
+      {f.trace.schedule_history.length>1&&<ul>{f.trace.schedule_history.map(v=><li key={v.revision}>
+        版本 {v.revision} · 开球 {fmtTime(v.kickoff)} {v.withdrawn?'已撤回':''} {v.evidence&&<a href={v.evidence}>查看原见证</a>}</li>)}</ul>}
+      {f.trace.score&&<p>模型 A 本场对数损失 <b>{num(f.trace.score.log_loss,4)}</b>，Brier <b>{num(f.trace.score.brier,4)}</b>。</p>}
+      {f.trace.hash&&<p className="trace-hash">赛前 SHA-256 · <code>{f.trace.hash}</code></p>}
+    </details>}
     {Boolean(f.source_conflict)&&<p className="notice">两个数据源对赛果的记录不同，本场暂停结算。</p>}
     {f.hg!=null&&f.ag!=null&&<section className="result"><span>赛后结果</span><button aria-expanded={reveal} onClick={()=>setReveal(!reveal)}>{reveal?'隐藏赛果':'查看真实赛果'}</button>
       {reveal&&<strong>{nameOf(f,'home')} {f.hg} – {f.ag} {nameOf(f,'away')}</strong>}</section>}

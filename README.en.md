@@ -4,7 +4,7 @@
 
 **1.0 release candidate** · [Matchdesk](https://lanthonyj.github.io/worldcup_prediction/) · [Pregame witness ledger](https://github.com/LAnthonyJ/worldcup_prediction/issues/1) · [Pilot and formal scorecards](https://lanthonyj.github.io/worldcup_prediction/#/report)
 
-Open the current matchweek or start a historical replay. The dashboard lists the latest result date, last successful sync and overdue fixtures. The independent model works without a market feed. A publicly witnessed and settled real fixture is the release gate. The market-superiority test has its own two-season evaluation period.
+Open the current matchweek or start a historical replay. The dashboard lists the latest result date, last successful sync and overdue fixtures. The independent model works without a market feed. The first real settled, timely witnessed independent forecast validates the A-only pipeline. Release v1.0 additionally requires a real verified market pair. The market-superiority test has its own two-season evaluation period.
 
 Explore English Premier League match predictions one day before kickoff. The Chinese-language dashboard compares an independent football model, a de-vigged market consensus and an 80/20 market/football blend. The local assistant answers questions using the selected match and the same probability snapshot.
 
@@ -22,6 +22,17 @@ python -m epl_agent demo
 ```
 
 Open [Matchdesk](http://127.0.0.1:5051). Pick a season and matchweek, search a club and select a fixture. Predictions and results are displayed separately. The static frontend, CC0 data and fitted models ship with the package; no provider account or Node installation is required.
+
+## Trace a match
+
+The fixture timeline records schedule revisions, the T−24h cutoff, freeze, public witness, result observation and confirmed Pages publication. The independent scorecard includes eligible A forecasts even when the collector has no odds key. The market scorecard uses the paired subset. The release candidate remains available while real fixtures mature.
+
+```sh
+python -m epl_agent status
+python -m epl_agent match trace 2026-27_fulham_manchester-united
+```
+
+Use `scripts/windows-collector.ps1` for the Windows startup task. Find credentials, backup, rollout and verification steps in the [operator runbook](docs/EVALUATION.md#windows-operator-quick-start).
 
 ## Reproduce the research
 

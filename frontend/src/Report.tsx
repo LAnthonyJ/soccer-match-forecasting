@@ -7,7 +7,7 @@ const components:Component[] = ['elo','dc','tree','a']
 const modelNames:Record<Component,string> = {elo:'Elo',dc:'Dixon–Coles',tree:'梯度提升树',a:'融合模型 A'}
 const sides:Record<Outcome,string> = {H:'主胜',D:'平局',A:'客胜'}
 const outcomes:Outcome[] = ['H','D','A']
-const cohortNames = {history:'历史回放',official:'正式市场评测',pilot:'前瞻试运行'}
+const cohortNames = {history:'历史回放',official:'正式市场评测',pilot:'前瞻试运行',independent:'独立 A · 全部前瞻场次'}
 type Cohort = keyof typeof cohortNames
 type OpenMatch = (id:string,season:string)=>void
 interface Bin {lo:number; hi:number; n:number; p:number|null; observed:number|null}
@@ -29,6 +29,8 @@ function MarketReport({r}:{r:Scores}) {
   const [cohort,setCohort] = useState<'official'|'pilot'>('official')
   const official = cohort==='official'
   const seasons = (official?r.seasons:r.pilot?.seasons) || []
+  const independent = official?r.independent:r.pilot?.independent
+  const market = official?r:r.pilot
   return <>
     <section className="report-banner"><div><small>T−24h · 市场对照</small><h2>{statusLabels[r.status]}</h2>
       <p>开球前 24 小时的冻结预测，与同一场的去水市场概率比较。</p></div>
@@ -42,28 +44,39 @@ function MarketReport({r}:{r:Scores}) {
           <div><dt>95% 置信区间</dt><dd>{r.ci?r.ci.map(v=>num(v,4)).join(' 至 '):'样本不足'}</dd></div>
           <div><dt>等待公开审计</dt><dd>{r.verification?.pending_pairs||0} 场</dd></div></>}
       </dl>
+      {independent&&<div className="cohort-card"><h4>独立模型 A 前瞻成绩</h4>
+        <p>已核验 {independent.n_scored} 场 / 注册期赛程 {independent.eligible} 场，其中 {independent.finished} 场已完场。</p>
+        <dl className="metrics rp-metrics"><div><dt>命中率</dt><dd>{pct(independent.scores.accuracy)}</dd></div>
+        <div><dt>对数损失</dt><dd>{num(independent.scores.log_loss,4)}</dd></div>
+        <div><dt>Brier</dt><dd>{num(independent.scores.brier,4)}</dd></div></dl>
+        <details><summary>独立模型覆盖与缺项</summary><p>赛程覆盖 {pct(independent.coverage)} · 完场覆盖 {pct(independent.finished_coverage)}</p>
+        {Object.entries(independent.missing).map(([k,n])=><p key={k}>{reasonName(k)} · {n} 场</p>)}</details></div>}
+      {market?.scores&&<div className="table-wrap"><table><thead><tr><th>同场配对</th><th>命中率</th><th>对数损失</th><th>Brier</th></tr></thead>
+        <tbody>{(['a','market','b'] as const).map(k=><tr key={k}><th>{{a:'模型 A',market:'市场',b:'融合 B'}[k]}</th>
+        <td>{pct(market.scores?.[k]?.accuracy)}</td><td>{num(market.scores?.[k]?.log_loss,4)}</td><td>{num(market.scores?.[k]?.brier,4)}</td></tr>)}</tbody></table></div>}
       {seasons.length>0?<div className="table-wrap"><table><thead><tr><th>赛季</th><th>赛程</th><th>已核验配对</th><th>覆盖率</th><th>模型 B 损失</th><th>市场损失</th></tr></thead>
         <tbody>{seasons.map(s=><tr key={s.season}><th>{s.season}</th><td>{s.total}</td><td>{s.paired}</td><td>{pct(s.coverage)}</td><td>{num(s.model_loss)}</td><td>{num(s.market_loss)}</td></tr>)}</tbody></table></div>:
         <p className="muted">{official?'尚无符合协议的正式赛季成绩。':'尚无试运行赛季记录。'}</p>}
       {!official&&<p className="muted">试运行用于检查采集和公开见证。领先市场的结论使用正式赛季。</p>}
       <a className="ledger" href={isStatic()?'./ledger.json':'/api/ledger'} target="_blank" rel="noopener">查看赛前预测账本（JSON）↗</a>
       <details className="protocol"><summary>评测门槛与缺失场次</summary><p>冻结后的两个完整赛季，各季覆盖率至少 90%。市场减模型的平均对数损失至少为 0.005，比赛周分块重采样的 95% 区间下界须大于零。</p>
-        {Object.entries(r.missing||{}).map(([k,n])=><p key={k}>{reasonName(k)} · 正式赛季 {n} 场</p>)}</details>
+        {Object.entries(market?.missing||{}).map(([k,n])=><p key={k}>{reasonName(k)} · {n} 场</p>)}</details>
     </section>
   </>
 }
 
 function PilotReceipt({r,openMatch,publicSnapshot}:{r:Scores;openMatch:OpenMatch;publicSnapshot:boolean}) {
-  const first = [...(r.pilot?.rows||[])].filter(row=>row.status==='paired' && row.evidence && row.a && row.b && row.market
+  const paired = [...(r.pilot?.rows||[])].filter(row=>row.status==='paired' && row.evidence && row.a && row.b && row.market
     && (outcomes.includes(row.actual as Outcome)||[0,1,2].includes(Number.isInteger(row.actual)?Number(row.actual):-1)))
     .sort((a,b)=>(a.kickoff||'').localeCompare(b.kickoff||'')||a.id.localeCompare(b.id))[0]
+  const first = paired || r.pilot?.independent?.rows.find(row=>row.status==='scored'&&row.a&&row.evidence)
   const index=first ? (typeof first.actual==='number'?first.actual:outcomes.indexOf(first.actual as Outcome)) : -1
   return <section className="panel"><header className="section-head"><h3>首场公开核验</h3><span>前瞻试运行</span></header>
     {first?<><p><button className="rp-match" onClick={()=>openMatch(first.id,first.season)}>{first.home} vs {first.away} ↗</button>
       {' · '}{first.kickoff?fmtTime(first.kickoff):first.season} · {sides[outcomes[index]]}</p>
       {first.evidence&&/^https:\/\/github\.com\//.test(first.evidence)&&<a className="ledger" href={first.evidence} target="_blank" rel="noopener">查看本场赛前公开见证 ↗</a>}
       <div className="table-wrap"><table><thead><tr><th>本场预测</th><th>对赛果的概率</th><th>对数损失</th><th>Brier</th></tr></thead>
-        <tbody>{(['a','market','b'] as const).map(k=>{const probs=first[k]!
+        <tbody>{(['a','market','b'] as const).filter(k=>first[k]).map(k=>{const probs=first[k]!
           return <tr key={k}><th>{{a:'独立模型 A',market:'市场基准',b:'融合模型 B'}[k]}</th><td>{pct(probs[index])}</td>
             <td>{num(-Math.log(Math.max(probs[index],1e-15)),4)}</td><td>{num(probs.reduce((sum,v,i)=>sum+(v-Number(i===index))**2,0),4)}</td></tr>})}</tbody></table></div>
       </>:<p className="muted">待验收。首场比赛完成赛前公开见证、赛果结算和独立核验后，这里将显示见证与单场评分。</p>}
@@ -171,11 +184,12 @@ function MatchRecords({r,openMatch}:{r:Scores;openMatch:OpenMatch}) {
     return ()=>controller.abort()
   },[cohort,history,retry])
   const pending=cohort==='history'&&history===null&&!error
-  const rows=useMemo(()=>cohort==='history'?history||[]:((cohort==='pilot'?r.pilot?.rows:r.rows)||[]).map(marketRow),[cohort,history,r])
+  const rows=useMemo(()=>cohort==='history'?history||[]:(cohort==='independent'?
+    [...(r.pilot?.independent?.rows||[]),...(r.independent?.rows||[])]:((cohort==='pilot'?r.pilot?.rows:r.rows)||[])).map(marketRow),[cohort,history,r])
   const seasons=useMemo(()=>Array.from(new Set(rows.map(m=>m.season))).sort().reverse(),[rows])
   const seasonRows=useMemo(()=>rows.filter(m=>!season||m.season===season),[rows,season])
   const codes=useMemo(()=>Array.from(new Set(seasonRows.map(m=>m.reason))).sort(),[seasonRows])
-  const component=cohort==='history'?'a':'b'
+  const component=cohort==='history'||cohort==='independent'?'a':'b'
   const filtered=useMemo(()=>{
     let list=seasonRows.filter(m=>!reason||reason===m.reason)
     if(sort==='worst') {
@@ -195,17 +209,17 @@ function MatchRecords({r,openMatch}:{r:Scores;openMatch:OpenMatch}) {
       <label>记录来源<select value={cohort} onChange={e=>{setCohort(e.target.value as Cohort);setSeason('');setReason('');setSort('date');setPage(0)}}>{(Object.keys(cohortNames) as Cohort[]).map(k=><option key={k} value={k}>{cohortNames[k]}</option>)}</select></label>
       <label>记录赛季<select value={season} onChange={e=>{setSeason(e.target.value);setReason('');setPage(0)}}><option value="">全部赛季</option>{seasons.map(s=><option key={s}>{s}</option>)}</select></label>
       <label>缺失原因或状态<select value={reason} onChange={e=>{setReason(e.target.value);setPage(0)}}><option value="">全部状态</option>{codes.map(k=><option key={k} value={k}>{reasonName(k)}</option>)}</select></label>
-      <label>场次筛选<select value={sort} onChange={e=>{setSort(e.target.value);setPage(0)}}><option value="date">全部 · 按日期</option><option value="worst">预测偏差最大 10 场</option>{cohort!=='history'&&<option value="gap">市场分歧最大 10 场</option>}</select></label>
+      <label>场次筛选<select value={sort} onChange={e=>{setSort(e.target.value);setPage(0)}}><option value="date">全部 · 按日期</option><option value="worst">预测偏差最大 10 场</option>{component==='b'&&<option value="gap">市场分歧最大 10 场</option>}</select></label>
     </div>
     {pending?<p className="muted" role="status">正在读取历史逐场概率…</p>:cohort==='history'&&error?
       <p className="muted" role="alert">历史明细加载失败。 <button className="plain" onClick={()=>setRetry(n=>n+1)}>重试</button></p>:<>
       <p className="rp-summary" role="status">{filtered.length.toLocaleString()} 场{sort==='worst'?' · 按模型给真实赛果的概率从低到高排列':sort==='gap'?' · 按模型 B 与市场的最大绝对概率差排列':''}</p>
       {filtered.length>0?<><div className="table-wrap" tabIndex={0} aria-label="逐场预测列表"><table className="rp-record-table"><thead><tr>
-        <th>比赛日期</th><th>对阵</th><th>实际赛果</th><th>{cohort==='history'?'A':'B'} 对赛果的概率</th>{cohort!=='history'&&<th>市场对赛果的概率</th>}<th>状态</th></tr></thead>
+        <th>比赛日期</th><th>对阵</th><th>实际赛果</th><th>{component.toUpperCase()} 对赛果的概率</th>{component==='b'&&<th>市场对赛果的概率</th>}<th>状态</th></tr></thead>
         <tbody>{filtered.slice(current*pageSize,(current+1)*pageSize).map((m,i)=><tr key={m.id+'-'+i}>
           <td>{m.date?fmtTime(m.date,true):'待核实'}</td><th><button className="rp-match" onClick={()=>openMatch(m.id,m.season)}>{m.home} <span>vs</span> {m.away}</button></th>
           <td>{m.actual?sides[m.actual]:'—'}</td><td>{pct(actualProbability(m,component))}</td>
-          {cohort!=='history'&&<td>{pct(m.actual?m.probs.market?.[outcomes.indexOf(m.actual)]:null)}</td>}
+          {component==='b'&&<td>{pct(m.actual?m.probs.market?.[outcomes.indexOf(m.actual)]:null)}</td>}
           <td>{m.evidence&&/^https:\/\/github\.com\//.test(m.evidence)?<a className="rp-link" href={m.evidence} target="_blank" rel="noopener">{reasonName(m.reason)} ↗</a>:reasonName(m.reason)}</td>
         </tr>)}</tbody></table></div>
         {lastPage>0&&<nav className="rp-pages" aria-label="逐场记录翻页"><button disabled={!current} onClick={()=>setPage(current-1)}>上一页</button>

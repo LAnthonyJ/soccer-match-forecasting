@@ -14,7 +14,8 @@ from .evidence import audit_public, store_collector_audit
 from .evaluation import formal_report, public_ledger
 from .market import PROTOCOL, canonical, digest, instant, root_dir
 
-FORMAT = "public-snapshot/v1"
+LEGACY_FORMAT = "public-snapshot/v1"
+FORMAT = "public-snapshot/v2"
 NAME = "snapshot.json"
 BRANCH = "public-data"
 UTC = timezone.utc
@@ -58,8 +59,9 @@ def _fixture_shape(row):
             _scalars(value)
 
 
-def _record_shape(row):
-    _only(row,ROW_KEYS)
+def _record_shape(row, version):
+    fields = ROW_KEYS if version == LEGACY_FORMAT else ROW_KEYS + " freeze_reason market_reason"
+    _only(row,fields)
     for key,value in row.items():
         if key!="payload":
             _scalars(value)
@@ -92,11 +94,47 @@ def _record_shape(row):
         raise ValueError("Frozen prediction digest mismatch")
 
 
-def _validate(batch):
-    _only(batch,"as_of fixtures versions overlay ledger seasons_health")
+def _operations_shape(batch, as_of):
+    ops = batch.get("operations", {})
+    _only(ops,"heartbeat_at upload_sha upload_at deployed_sha deployed_at publication_status checked_at sync_status")
+    for key,value in ops.items():
+        if value is None:
+            continue
+        if key.endswith("_at"):
+            if instant(value)>as_of:
+                raise ValueError("Collector status is newer than the snapshot")
+        elif key.endswith("_sha"):
+            if not isinstance(value,str) or not re.fullmatch(r"[a-f0-9]{40}",value):
+                raise ValueError("Invalid public commit SHA")
+        elif not isinstance(value,str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,39}",value):
+            raise ValueError("Invalid collector status")
+    deployments = batch.get("deployments", [])
+    if not isinstance(deployments,list):
+        raise ValueError("Invalid Pages deployment receipts")
+    seen = set()
+    for receipt in deployments:
+        _only(receipt,"id kickoff revision hash result_observed_at seen_at sha")
+        key = (receipt["id"],receipt["kickoff"],receipt["revision"],receipt.get("hash"),receipt.get("result_observed_at"))
+        if (not isinstance(receipt["id"],str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,180}",receipt["id"])
+                or type(receipt["revision"]) is not int or receipt["revision"]<0
+                or not isinstance(receipt["sha"],str) or not re.fullmatch(r"[a-f0-9]{40}",receipt["sha"])
+                or (receipt.get("hash") is not None and not re.fullmatch(r"[a-f0-9]{64}",receipt["hash"]))
+                or instant(receipt["seen_at"])>as_of
+                or (receipt.get("result_observed_at") and instant(receipt["result_observed_at"])>instant(receipt["seen_at"]))
+                or key in seen):
+            raise ValueError("Invalid Pages deployment receipt")
+        instant(receipt["kickoff"])
+        seen.add(key)
+
+
+def _validate(batch, version=FORMAT):
+    extra = "" if version == LEGACY_FORMAT else " operations deployments"
+    _only(batch,"as_of fixtures versions overlay ledger seasons_health"+extra)
     as_of = instant(batch["as_of"])
     if as_of>datetime.now(UTC):
         raise ValueError("Snapshot time is in the future")
+    if version != LEGACY_FORMAT:
+        _operations_shape(batch,as_of)
     ledger = batch["ledger"]
     _only(ledger,"registration registration_evidence health records")
     reg = ledger["registration"]
@@ -115,7 +153,7 @@ def _validate(batch):
     if ledger["registration_evidence"]:
         _flat(ledger["registration_evidence"],"at url")
     for r in ledger["records"]:
-        _record_shape(r)
+        _record_shape(r,version)
         if any(instant(stamp)>as_of for stamp in (r["observed"],r.get("witnessed"),(r.get("payload") or {}).get("frozen")) if stamp):
             raise ValueError("A ledger observation is newer than its snapshot")
     groups = defaultdict(list)
@@ -183,8 +221,8 @@ def expected_issue():
     return f"https://github.com/{repo}/issues/{number}"
 
 
-def _check(batch, issue, session=None):
-    as_of = _validate(batch)
+def _check(batch, issue, session=None, *, version=FORMAT):
+    as_of = _validate(batch,version)
     ledger = dict(batch["ledger"])
     if issue:
         audit = audit_public(ledger,session,expected_issue=issue,as_of=as_of)
@@ -193,10 +231,13 @@ def _check(batch, issue, session=None):
         ledger["public_audit"] = audit
     elif ledger["registration_evidence"] or any(r["evidence"] for r in ledger["records"]):
         raise ValueError("Set the independent expected issue before verifying a witnessed snapshot")
-    report = formal_report(batch["fixtures"],ledger,as_of)
+    report = formal_report(batch["fixtures"],ledger,as_of,include_independent=version!=LEGACY_FORMAT)
     # Audit execution time can differ on a second machine. Scores use the batch's fixed cutoff.
     def scores(cohort):
-        return {k:cohort[k] for k in ("n_pairs","seasons","scores","delta","ci","missing")}
+        summary = {k:cohort[k] for k in ("n_pairs","seasons","scores","delta","ci","missing")}
+        if version != LEGACY_FORMAT:
+            summary["independent"] = cohort["independent"]
+        return summary
     benchmark = {"formal":scores(report),"pilot":scores(report["pilot"]),"status":report["status"]}
     latest = max(batch["seasons_health"])
     return dict(batch,ledger=ledger,health=batch["seasons_health"][latest]),benchmark
@@ -218,9 +259,12 @@ def _write_atomic(path, content):
 
 
 def export_bundle(directory, *, root=None, session=None):
+    from . import operations
     root = Path(root or root_dir())
     db = root/"fixtures.sqlite3"
     ledger = public_ledger(root)
+    worker_state = operations.public_state(root)
+    deployments = operations.public_deployments(root)
     # Network reads below use this instant, including when the issue receives another forecast later.
     stamp = datetime.now(UTC)
     matches = data.load_matches(db,as_of=stamp)
@@ -230,7 +274,7 @@ def export_bundle(directory, *, root=None, session=None):
     years.update((ledger["registration"] or {}).get("seasons",[]))
     rows = [r for r in matches if r["season"] in years]
     batch = {"as_of":stamp.isoformat(),"fixtures":rows,"versions":versions,
-             "overlay":data.openligadb_overlay(db,as_of=stamp),
+              "overlay":data.openligadb_overlay(db,as_of=stamp),"operations":worker_state,"deployments":deployments,
              "ledger":{k:ledger[k] for k in ("registration","registration_evidence","records","health")},
              "seasons_health":{s:data.season_health(db,s,matches=rows,now=stamp) for s in sorted({r["season"] for r in rows})}}
     verified,scores = _check(batch,expected_issue(),session)
@@ -247,9 +291,9 @@ def _verify_bytes(contents, session=None):
         raise ValueError("Snapshot exceeds supported size")
     envelope = json.loads(contents)
     _only(envelope,"format sha256 data scores")
-    if envelope["format"]!=FORMAT or digest(envelope["data"])!=envelope["sha256"]:
+    if envelope["format"] not in (FORMAT,LEGACY_FORMAT) or digest(envelope["data"])!=envelope["sha256"]:
         raise ValueError("Invalid public snapshot format or SHA-256")
-    batch,scores = _check(envelope["data"],expected_issue(),session)
+    batch,scores = _check(envelope["data"],expected_issue(),session,version=envelope["format"])
     if canonical(envelope["scores"])!=canonical(scores):
         raise ValueError("Published and independently recomputed scores differ")
     return batch

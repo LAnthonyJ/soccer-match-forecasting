@@ -242,3 +242,37 @@ test('report drills from a witnessed pilot example to per-match scores, exclusio
   await proof.getByRole('button').click()
   await page.getByRole('heading',{name:'胜平负预测'}).waitFor()
 })
+
+for (const width of [360,768,1440]) {
+  test('verified independent forecast, timeline, reason and CSV at '+width,async t=>{
+    const page=await makePage(t,width,pages)
+    let fixtureId
+    await page.route('**/dashboard.json',async route=>{
+      const response=await route.fetch(), data=await response.json()
+      const game=data.fixtures.find(m=>m.id===data.default_id)
+      fixtureId=game.id
+      game.trace={revision:2,schedule_history:[],score:{log_loss:0.9163,brier:0.545,correct:true}}
+      game.market_note='采集机未配置赔率密钥'
+      data.report.pilot={n_pairs:0,seasons:[],independent:{n_scored:1,total:380,eligible:310,finished:1,
+        coverage:1/310,finished_coverage:1,scores:{accuracy:1,log_loss:.9163,brier:.545},missing:{},
+        rows:[{id:game.id,season:game.season,home:game.home,away:game.away,kickoff:game.kickoff_utc,
+          actual:'H',a:[.4,.35,.25],status:'scored',reason:'scored',evidence:'https://github.com/example/repo/issues/1#issuecomment-1'}]}}
+      await route.fulfill({response,json:data})
+    })
+    await page.reload()
+    await page.getByRole('link',{name:'模型成绩'}).click()
+    await page.getByRole('button',{name:'试运行',exact:true}).click()
+    await page.getByRole('heading',{name:'独立模型 A 前瞻成绩'}).waitFor()
+    await page.getByLabel('记录来源').selectOption('independent')
+    assert.equal(await page.locator('.rp-record-table tbody tr').count(),1)
+    const downloaded=page.waitForEvent('download')
+    await page.getByRole('button',{name:/下载当前筛选 CSV/}).click()
+    assert.match(await readFile(await (await downloaded).path(),'utf8'),new RegExp(fixtureId))
+    await page.locator('.rp-record-table tbody button').click()
+    await page.getByText(/比赛时间线 · 赛程版本/).click()
+    await page.getByText(/模型 A 本场对数损失/).waitFor()
+    await page.getByText('缺少市场报价',{exact:true}).click()
+    await page.getByText('采集机未配置赔率密钥',{exact:true}).first().waitFor()
+    await layout(page,width)
+  })
+}

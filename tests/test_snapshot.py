@@ -26,6 +26,9 @@ class SnapshotTests(unittest.TestCase):
         snapshot.export_bundle(self.dir/"out")
         path = self.dir/"out"/snapshot.NAME
         original = json.loads(path.read_bytes())
+        self.assertEqual(original["format"],"public-snapshot/v2")
+        self.assertIn("independent",original["scores"]["formal"])
+        self.assertEqual(original["scores"]["formal"]["independent"]["n_scored"],0)
         with patch.dict(os.environ,{"EPL_AGENT_HOME":str(self.dir/"unused")}):
             verified = snapshot.verify(path.parent)
             self.assertEqual(len(verified["fixtures"]),760)
@@ -43,6 +46,40 @@ class SnapshotTests(unittest.TestCase):
                 path.write_text(canonical(bad),encoding="utf8")
                 with self.assertRaises(ValueError):
                     snapshot.verify(path.parent)
+
+    def test_v1_exact_score_shape_and_v2_public_status(self):
+        snapshot.export_bundle(self.dir/"out")
+        path = self.dir/"out"/snapshot.NAME
+        modern = json.loads(path.read_bytes())
+        legacy = deepcopy(modern)
+        legacy["format"] = "public-snapshot/v1"
+        for key in ("deployments","operations"):
+            del legacy["data"][key]
+        for key in ("formal","pilot"):
+            del legacy["scores"][key]["independent"]
+        legacy["sha256"] = digest(legacy["data"])
+        path.write_text(canonical(legacy),encoding="utf8")
+        self.assertEqual(snapshot.verify(path.parent)["as_of"],legacy["data"]["as_of"])
+        legacy["scores"]["formal"]["independent"] = {}
+        path.write_text(canonical(legacy),encoding="utf8")
+        with self.assertRaisesRegex(ValueError,"recomputed scores"):
+            snapshot.verify(path.parent)
+        stamp = modern["data"]["as_of"]
+        modern["data"]["operations"] = {"heartbeat_at":stamp,"sync_status":"ok","deployed_sha":"a"*40}
+        modern["sha256"] = digest(modern["data"])
+        path.write_text(canonical(modern),encoding="utf8")
+        self.assertEqual(snapshot.verify(path.parent)["operations"]["heartbeat_at"],stamp)
+        for fields in ({"private_log":"private"},{"upload_sha":"not-a-sha"},{"sync_status":"a/b"}):
+            bad = deepcopy(modern)
+            bad["data"]["operations"].update(fields)
+            bad["sha256"] = digest(bad["data"])
+            path.write_text(canonical(bad),encoding="utf8")
+            with self.assertRaises(ValueError):
+                snapshot.verify(path.parent)
+        modern["scores"]["formal"]["independent"]["n_scored"] = 1
+        path.write_text(canonical(modern),encoding="utf8")
+        with self.assertRaisesRegex(ValueError,"recomputed scores"):
+            snapshot.verify(path.parent)
 
     def test_publish_targets_only_data_and_code_marker(self):
         snapshot.export_bundle(self.dir/"out")
@@ -115,6 +152,20 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(scores["pilot"]["n_pairs"],0)
         self.assertEqual(formal_report(rows,ledger,as_of)["verification"]["pending_pairs"],1)
         self.assertEqual(trusted["ledger"]["public_audit"]["verified"],1)
+        solo_batch = deepcopy(batch)
+        solo = solo_batch["ledger"]["records"][0]
+        solo["payload"].update(market=None,b=None)
+        solo.update(hash=digest(solo["payload"]),reason="no_api_key",market_reason="no_api_key")
+        solo_comment = comment(11,at,"forecast "+solo["hash"],_summary(solo["payload"]))
+        solo_http = Mock()
+        solo_http.get.side_effect = lambda url,**kw:Mock(status_code=200,json=lambda:
+            [c1,solo_comment] if url.endswith("/comments") else {"private":False})
+        _,solo_scores = snapshot._check(solo_batch,issue,solo_http)
+        self.assertEqual(solo_scores["formal"]["independent"]["n_scored"],1)
+        self.assertEqual(solo_scores["formal"]["n_pairs"],0)
+        solo_batch["ledger"]["records"].clear()
+        with self.assertRaisesRegex(ValueError,"witness audit failed"):
+            snapshot._check(solo_batch,issue,solo_http)
         with database() as db:
             write_value(db,"registration",registration)
             write_value(db,"registration_evidence",ledger["registration_evidence"])

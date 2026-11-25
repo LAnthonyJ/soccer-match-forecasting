@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from . import data, models
+from . import data, lifecycle, models, operations
 from .evaluation import formal_report, public_ledger
 from .market import instant, root_dir
 
@@ -76,6 +76,7 @@ REASONS = {
     "unverified_forecast": "赛前记录未通过核验", "no_matching_snapshot": "未找到同赛程版本的快照",
     "no_historical_market": "历史回放缺少同场、同时间的市场快照",
     "not_due": "尚未到达赛前采集窗口", "collecting_quotes": "正在采集合格报价",
+    "prediction_error":"单场模型计算失败","pending_freeze":"等待冻结","deadline_reserve":"已预留冻结时间，未取得同期报价",
     "pending_audit": "等待公开核验", "unknown_kickoff": "开球时间待核实",
     "missing_market": "缺少合格的同期市场报价", "no_event": "该场暂无市场报价",
 }
@@ -196,6 +197,7 @@ def dashboard(season=None, *, static=False, all_seasons=False, snapshot=None):
     output = _present(targets,matches,ledger,now,snapshot)
     example = next((r for r in reversed(output) if r["prediction"] and r["prediction"]["source"]=="replay" and r["hg"] is not None),None)
     report = formal_report(matches,ledger,now)
+    _attach_trace(output,matches,ledger,report,now,snapshot)
     scores = _history_for(snapshot)[1]
     report["history"] = {k:v for k,v in scores.items() if k != "rows"}
     health_season = season or years[-1]
@@ -205,12 +207,20 @@ def dashboard(season=None, *, static=False, all_seasons=False, snapshot=None):
         health = snapshot["seasons_health"].get(health_season) or snapshot["health"]
     complete = [s for s,count in Counter(m["season"] for m in matches if m["hg"] is not None and not m.get("source_conflict")).items() if count == 380]
     latest = max((r for r in matches if r.get("observed_at")),key=lambda r:r["observed_at"],default={})
-    return {"fixtures":output, "report":report, "default_id":example["id"] if example else _current_id(output,now),
+    state = operations.public_state() if snapshot is None else snapshot.get("operations",{})
+    status = operations.status(matches,ledger,health,now,state,snapshot_at=snapshot["as_of"] if snapshot else None)
+    return {"operations":status,"fixtures":output, "report":report, "default_id":example["id"] if example else _current_id(output,now),
             "current_id":_current_id(output,now), "available_seasons":selected if static else years,
             "updated_at":now.isoformat(), "health":health, "last_complete_season":max(complete,default=None), "archive_seasons":years,
             "data_version":latest.get("source_commit") or data.read_coverage()["source_commit"],
             "last_change_observed_at":latest.get("observed_at"), "last_scored_date":health.get("last_scored_date"),
             "team_aliases":data.ALIASES, "public_snapshot":snapshot is not None}
+
+
+def _attach_trace(games,matches,ledger,report,now,snapshot=None):
+    versions = data.load_versions(root_dir()/"fixtures.sqlite3") if snapshot is None else snapshot["versions"]
+    deployments = operations.public_deployments() if snapshot is None else snapshot.get("deployments",[])
+    lifecycle.attach(games,matches,versions,ledger,report,deployments,now)
 
 
 def export_history_assets(directory, dashboard_dict, *, snapshot=None):
@@ -241,6 +251,7 @@ def export_history_assets(directory, dashboard_dict, *, snapshot=None):
                     continue
                 raw = replays.get(m["id"])
                 rows.append(item(m,raw if raw and m["kickoff_utc"] and models.replay_matches(raw,m) else None,reason="no_historical_market"))
+        _attach_trace(rows,source,ledger,dashboard_dict["report"],instant(dashboard_dict["updated_at"]),snapshot)
         (season_dir/(season+".json")).write_text(json.dumps(rows,ensure_ascii=False,separators=(",",":")),encoding="utf8")
 
 
@@ -249,7 +260,10 @@ def prediction(match_id):
     m = next((r for r in matches if r["id"] == match_id),None)
     if not m:
         raise KeyError(match_id)
-    return _present([m], matches, public_ledger(), datetime.now(UTC))[0]
+    now,ledger = datetime.now(UTC),public_ledger()
+    games = _present([m], matches, ledger, now)
+    _attach_trace(games,matches,ledger,formal_report(matches,ledger,now),now)
+    return games[0]
 
 
 def ask(question, fixture_id=None, zone="Europe/London"):
@@ -261,7 +275,8 @@ def ask(question, fixture_id=None, zone="Europe/London"):
     if any(x in q for x in ("伤","停赛","伤停","阵容","首发","injur","lineup")):
         return reply("目前缺少可核实的实时伤停和首发数据。模型使用赛前已知的历史赛果。")
     matches = fixtures()
-    if any(x in q for x in ("过去","上赛季","成绩","表现比","领先市场","赛季模型","战绩","beat the market")):
+    trace_question = any(word in q for word in ("这场得","这场评分","这场的评分","这场的成绩","结算","见证","时间线","这场比赛得","单场评分"))
+    if not trace_question and any(x in q for x in ("过去","上赛季","成绩","表现比","领先市场","赛季模型","战绩","beat the market")):
         report = formal_report(matches,public_ledger())
         requested = re.search(r"20\d\d-\d\d",q)
         season = requested.group() if requested else None
@@ -309,12 +324,16 @@ def ask(question, fixture_id=None, zone="Europe/London"):
                          [{"id":m["id"],"label":f"{m['date']} · {m['home']} – {m['away']}"} for m in ranked[:8]])
     game = prediction(selected["id"])
     name = f"{game['date']} {game['home_zh']} 对 {game['away_zh']}"
+    if trace_question:
+        return reply(game["trace_answer"])
     if any(s in q for s in ("踢谁","对手","何时","时间","赛程","weekend")):
         return reply(f"{name}。开球时间（UTC）：{game['kickoff_utc'] or '待核实'}。")
     p = game["prediction"]
     if not p:
         return reply(f"{name} 暂无已核实的赛前预测。{game['market_note']}。")
     if any(s in q for s in ("市场","分歧","赔率","market")):
+        if not p.get("market") and game.get("market_note"):
+            return reply(f"{name}。"+game["market_note"]+"。缺少合格的同期市场快照，无法计算市场分歧。")
         use_a = any(word in q for word in ("独立","模型a","模型 a","model a"))
         return reply(f"{name}。"+game["independent_market_explanation" if use_a else "market_explanation"])
     return reply(f"{name}。"+game["draw_explanation" if "平局" in q else "explanation"])

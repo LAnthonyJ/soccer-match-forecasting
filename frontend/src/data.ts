@@ -9,22 +9,35 @@ export interface MarketRow {
   id:string; season:string; home?:string; away?:string; kickoff?:string|null; cutoff?:string|null;
   status?:string; reason?:string|null; actual?:string|number|null; a?:Triple|null; market?:Triple|null; b?:Triple|null; evidence?:string|null
 }
+export interface FixtureTrace {
+  revision:number; schedule_at?:string; cutoff?:string; frozen?:string; witnessed?:string; result_at?:string;
+  witness_status?:string; freeze_reason?:string; hash?:string; score_as_of?:string; settlement?:string;
+  score?:{log_loss:number;brier:number;correct:boolean}; deployed?:{seen_at:string;sha:string};
+  schedule_history:{revision:number;kickoff?:string;observed?:string;withdrawn?:boolean;evidence?:string}[]
+}
+export interface Independent {
+  n_scored:number; total:number; eligible:number; finished:number; coverage:number; finished_coverage:number;
+  scores:{log_loss:number|null;brier:number|null;accuracy:number|null}; rows:MarketRow[]; missing:Record<string,number>
+}
 export interface Prediction {
   a:Triple; b:Triple|null; market:Triple|null; xg:[number,number]; top_scores:[number,number,number][];
   cutoff:string; model_version:string; samples:[number,number];
   form?:Record<'home'|'away',{gf:number;ga:number;points:number}>; source:'replay'|'frozen'|'preview'|'reconstruction';
 }
 export interface Fixture {
+  trace?:FixtureTrace; trace_answer?:string;
   id:string; season:string; date:string; kickoff_utc:string|null; home:string; away:string; home_zh?:string; away_zh?:string;
   round?:string|number|null; hg:number|null; ag:number|null; prediction:Prediction|null;
   result_source?:string|null; source_conflict?:unknown; market_note?:string; market_reason?:string; evidence?:string|null;
   explanation?:string; draw_explanation?:string; market_explanation?:string; independent_market_explanation?:string;
 }
 export interface SeasonScore {season:string; total:number; paired:number; coverage:number; model_loss:number|null; market_loss:number|null}
+type MarketMetrics = Partial<Record<'a'|'market'|'b',{accuracy:number|null;log_loss:number|null;brier:number|null}>>
 export interface Report {
+  scores?:MarketMetrics;
   status:'accumulating'|'unproven'|'leading'; n_pairs:number; seasons:SeasonScore[];
   delta:number|null; ci:[number,number]|null; missing:Record<string,number>;
-  pilot?:{n_pairs:number; rows?:MarketRow[]; seasons:SeasonScore[]}; rows?:MarketRow[];
+  independent?:Independent; pilot?:{n_pairs:number; scores?:MarketMetrics; missing?:Record<string,number>; rows?:MarketRow[]; seasons:SeasonScore[]; independent?:Independent}; rows?:MarketRow[];
   verification?:{pending_pairs?:number;audited_at?:string|null};
   history:{n:number; seasons:{season:string; n:number; log_loss:number; brier:number; accuracy:number; elo_loss:number}[];
     calibration:{p:number; observed:number; n:number}[]; worst:{id:string;home:string;away:string;season:string;prob:number;actual:string|number}[]};
@@ -34,6 +47,8 @@ export interface Health {
   sources?:{provider:string;last_success_at:string|null;status:string}[];
 }
 export interface Dashboard {
+  operations?:{worker_status:string; heartbeat_at?:string; snapshot_at?:string; next_cutoff?:string;
+    upload_sha?:string; deployed_sha?:string; publication_status?:string};
   fixtures:Fixture[]; default_id:string; current_id?:string; updated_at:string; data_version?:string; available_seasons?:string[];
   health?:Health; public_snapshot?:boolean; archive_seasons?:string[]; last_scored_date?:string|null; last_complete_season?:string|null; team_aliases?:Record<string,string[]>; report:Report
 }
@@ -94,6 +109,8 @@ export async function fetchSeasonFixtures(season:string, signal:AbortSignal):Pro
   return res.json()
 }
 export const reasons:Record<string,string> = {
+  frozen:'赛前已冻结',scored:'已核验评分',missing_api_key:'采集机未配置赔率密钥',missing_witness:'缺少公开见证',
+  late_witness:'见证晚于截止',pending_freeze:'等待冻结',prediction_error:'单场模型计算失败',deadline_reserve:'截止前未取得报价',
   missed_window:'错过采集窗口', no_matching_snapshot:'缺少对应版本快照', rescheduled:'赛程变更', pending_audit:'等待公开核验',
   insufficient_books:'合格书商不足', source_conflict:'比分冲突', unverified_forecast:'见证未通过', missing_market:'缺少同期市场',
   schedule_unverified:'赛程未核实', no_api_key:'采集机未配置赔率密钥', paired:'已配对', awaiting_result:'等待赛果',
@@ -102,7 +119,8 @@ export const reasons:Record<string,string> = {
 export function localAnswer(question:string,selected:Fixture|undefined,data:Dashboard):Answer {
   const q=question.trim().toLowerCase()
   if (/伤|停赛|首发|阵容|injur|lineup/.test(q)) return {answer:'目前缺少可核实的实时伤停和首发数据。模型使用赛前已知的历史赛果。'}
-  if (/过去|成绩|表现比|领先市场|赛季模型|战绩|beat the market|上赛季/.test(q)) {
+  const tracing=/这场得|这场评分|这场的评分|这场的成绩|结算|见证|时间线|这场比赛得|单场评分/.test(q)
+  if (!tracing && /过去|成绩|表现比|领先市场|赛季模型|战绩|beat the market|上赛季/.test(q)) {
     const r=data.report
     const season=q.match(/20\d\d-\d\d/)?.[0] || (/过去一季|上赛季/.test(q)?data.last_complete_season:null)
     if(season){
@@ -131,8 +149,12 @@ export function localAnswer(question:string,selected:Fixture|undefined,data:Dash
     return {answer:games.length?'请选择具体场次。':'已收录的赛程中没有找到符合条件的比赛。',choices:games.slice(0,8).map(m=>({id:m.id,label:m.date+' · '+m.home+' – '+m.away}))}
   }
   const title=f.date+' '+nameOf(f,'home')+' 对 '+nameOf(f,'away')
+  if(tracing) return {answer:f.trace_answer||'本场没有可评分的前瞻冻结记录。'}
   if(/踢谁|对手|何时|时间|赛程|weekend/.test(q)) return {answer:title+'。开球时间（UTC）：'+(f.kickoff_utc||'待核实')+'。'}
   if(!f.prediction) return {answer:title+' 暂无已核实的赛前预测。'+(f.market_note||'')+'。'}
-  if(/市场|分歧|赔率|market/.test(q)) return {answer:title+'。'+(/独立|模型\s*a|model a/.test(q)?f.independent_market_explanation:f.market_explanation)}
+  if(/市场|分歧|赔率|market/.test(q)){
+    if(!f.prediction.market&&f.market_note)return {answer:title+'。'+f.market_note+'。缺少合格的同期市场快照，无法计算市场分歧。'}
+    return {answer:title+'。'+(/独立|模型\s*a|model a/.test(q)?f.independent_market_explanation:f.market_explanation)}
+  }
   return {answer:title+'。'+(q.includes('平局')?f.draw_explanation:f.explanation)}
 }

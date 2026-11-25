@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { type Dashboard, type Fixture, type Answer, isStatic, localAnswer, nameOf } from './data'
-const examples=['这场比赛的胜平负概率是多少？','模型和市场的分歧在哪里？','过去一季模型比市场好吗？','这场比赛有哪些伤停？']
+const examples=['这场比赛的胜平负概率是多少？','这场比赛得了多少分？','模型和市场的分歧在哪里？','过去一季模型比市场好吗？','这场比赛有哪些伤停？']
 export function Ask({data,f,initial,select}:{data:Dashboard;f:Fixture|undefined;initial:string;select:(id:string)=>void}) {
   const [question,setQuestion]=useState(''),[asked,setAsked]=useState(''),[answer,setAnswer]=useState<Answer|null>(null),[pending,setPending]=useState(false)
   const control=useRef<AbortController|null>(null)

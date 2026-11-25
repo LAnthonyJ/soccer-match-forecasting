@@ -18,3 +18,5 @@
 .rp-pages{display:flex;align-items:center;justify-content:end;gap:12px}
 .rp-files{display:flex;flex-wrap:wrap;gap:8px 16px;margin:12px 0 0}.rp-files a{font-size:13px;color:#215f47;text-decoration:underline;text-underline-offset:3px}
 @media(max-width:650px){.rp-calibration{display:block}.rp-toolbar{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px}.rp-cal-controls{grid-template-columns:1fr;gap:6px}.rp-cal-controls p{margin-top:0}.rp-download,.rp-switch button{padding:7px 8px}}
+
+.cohort-card {border-left:3px solid #478264;padding:0 1rem;margin:1.5rem 0}.cohort-card h4 {margin:0}.trace-hash{overflow-wrap:anywhere}

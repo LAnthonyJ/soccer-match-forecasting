@@ -90,6 +90,17 @@ class QuoteWindowTests(unittest.TestCase):
         self.fetch.return_value.json.return_value = [None, malformed, event]
         self.assertEqual(self.tick(1)["status"],"paired")
 
+    def test_quote_predating_schedule_confirmation_preserves_a(self):
+        self.fetch.return_value.json.return_value = [self.quote(2)]
+        self.tick(14)
+        self.match["schedule_observed_at"] = (self.cutoff-timedelta(minutes=7)).isoformat()
+        self.fetch.return_value.json.return_value = []
+        self.assertEqual(self.tick(1)["captured"],1)
+        record = public_ledger(self.root)["records"][0]
+        self.assertEqual(record["reason"],"unverified_observation")
+        self.assertEqual(record["payload"]["observed"],self.now.isoformat())
+        self.assertIsNone(record["payload"]["market"])
+
     def test_concurrent_workers_reserve_once_and_freeze_one_snapshot(self):
         self.now = self.cutoff-timedelta(minutes=1)
         self.fetch.return_value.json.return_value = [self.quote(2)]
@@ -102,3 +113,69 @@ class QuoteWindowTests(unittest.TestCase):
         self.predict.assert_called_once()
         with database(self.root) as db:
             self.assertEqual(read_value(db,"quota:2027-09"),499)
+
+    def test_ten_without_key_freeze_as_one_batch_and_retry_only_failed_fixture(self):
+        matches = [dict(self.match,id=f"fixture-{i}") for i in range(10)]
+        self.now = self.cutoff-timedelta(minutes=1)
+        attempts = []
+        def batch(targets, observed, version):
+            attempts.append(([m["id"] for m in targets],observed,version))
+            return {m["id"]:self.predict.return_value for m in targets if len(targets)==1 or m!=matches[3]}
+
+        with patch.dict(os.environ, {"ODDS_API_KEY":""}):
+            tick = lambda: collect(matches,self.predict,self.root,predict_many=batch,clock=lambda:self.now,get=self.fetch)
+            self.assertEqual(tick()["captured"],9)
+            with database(self.root) as db:
+                rows = list(db.execute("SELECT fixture,hash,payload,freeze_reason,market_reason FROM captures"))
+                hashes = {r["fixture"]:r["hash"] for r in rows if r["hash"]}
+                self.assertEqual(len(hashes),9)
+                for row in rows:
+                    self.assertEqual(row["market_reason"],"missing_api_key")
+                    if row["hash"]:
+                        payload = json.loads(row["payload"])
+                        self.assertEqual(payload["a"],[.5,.2,.3])
+                        self.assertIsNone(payload["b"])
+                        self.assertIsNone(row["freeze_reason"])
+                    else:
+                        self.assertEqual(row["freeze_reason"],"prediction_error")
+            self.assertEqual(tick()["captured"],1)
+            self.assertEqual(tick()["captured"],0)
+            rows = public_ledger(self.root)["records"]
+            self.assertEqual({r["id"]:r["hash"] for r in rows if r["id"] in hashes},hashes)
+            self.assertEqual(attempts,[([m["id"] for m in matches],self.now,"locked"),
+                                       ([matches[3]["id"]],self.now,"locked")])
+        self.fetch.assert_not_called()
+        self.predict.assert_not_called()
+
+    def test_crash_between_commits_preserves_first_hash_and_recovers_stale_claim(self):
+        matches = [self.match,dict(self.match,id="other")]
+        self.now = self.cutoff-timedelta(seconds=75)
+        self.fetch.return_value.json.return_value = []
+        self.predict.side_effect = [self.predict.return_value,KeyboardInterrupt()]
+        with self.assertRaises(KeyboardInterrupt):
+            collect(matches,self.predict,self.root,clock=lambda:self.now,get=self.fetch)
+        first = next(r for r in public_ledger(self.root)["records"] if r["id"]==self.match["id"])
+        self.assertIsNotNone(first["hash"])
+        self.now += timedelta(seconds=25)
+        self.predict.side_effect = None
+        self.assertEqual(collect(matches,self.predict,self.root,clock=lambda:self.now,get=self.fetch)["captured"],1)
+        rows = public_ledger(self.root)["records"]
+        self.assertEqual(sum(bool(r["hash"]) for r in rows),2)
+        self.assertEqual(next(r["hash"] for r in rows if r["id"]==self.match["id"]),first["hash"])
+
+    def test_restart_after_missing_window_separates_missing_market_from_missing_a(self):
+        with patch.dict(os.environ, {"ODDS_API_KEY":""}):
+            self.tick(10)
+            self.tick(-1)
+        with database(self.root) as db:
+            row = db.execute("SELECT * FROM captures").fetchone()
+            self.assertIsNone(row["hash"])
+            self.assertEqual(row["freeze_reason"],"missed_window")
+            self.assertEqual(row["market_reason"],"missing_api_key")
+
+    def test_last_seconds_keep_local_forecast_ahead_of_an_external_request(self):
+        self.now = self.cutoff-timedelta(seconds=5)
+        result = collect([self.match],self.predict,self.root,clock=lambda:self.now,get=self.fetch)
+        self.assertEqual(result,{"status":"deadline_reserve","captured":1})
+        self.fetch.assert_not_called()
+        self.assertEqual(public_ledger(self.root)["records"][0]["payload"]["a"],[.5,.2,.3])

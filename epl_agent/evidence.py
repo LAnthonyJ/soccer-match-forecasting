@@ -2,7 +2,8 @@
 import json
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 import requests
 
@@ -186,41 +187,125 @@ def audit_and_store(root=None, session=None):
     return report
 
 
-def publish(root=None, *, session=None):
+def _claim_witness(root, issue_url, now):
+    # Keep the exact body across timeouts and restarts. Never hold the collector's
+    # SQLite write lock while talking to GitHub.
+    with database(root) as db:
+        db.execute("BEGIN IMMEDIATE")
+        reg = read_value(db, "registration")
+        if not reg:
+            raise ValueError("Register a model first.")
+        witness = read_value(db, "registration_evidence")
+        if witness and witness["url"].split("#")[0] != issue_url:
+            raise ValueError("Configured issue differs from the registration witness")
+        batch = read_value(db, "witness_outbox")
+        recovery = bool(batch)
+        if batch:
+            if batch["issue"] != issue_url or batch["protocol"] != digest(reg):
+                raise ValueError("Pending witness belongs to another issue or registration")
+            if instant(batch["lease_until"]) > now:
+                return None, False
+        else:
+            rows = db.execute("""SELECT hash,payload FROM captures
+                WHERE hash IS NOT NULL AND evidence IS NULL
+                ORDER BY CASE WHEN julianday(kickoff)-1 >= julianday(?) THEN 0 ELSE 1 END,
+                         julianday(kickoff), fixture LIMIT 40""", (now.isoformat(),)).fetchall()
+            if witness and not rows:
+                return None, False
+            lines = [] if witness else ["protocol "+digest(reg), canonical(reg)]
+            for row in rows:
+                lines.extend(["forecast "+row["hash"], canonical(_summary(json.loads(row["payload"])))])
+            batch = {"issue":issue_url, "protocol":digest(reg), "registration":not witness,
+                     "hashes":[row["hash"] for row in rows], "started":now.isoformat(),
+                     "body":"EPL T-24h · SHA-256\n\n" + "\n".join(lines)}
+        batch["claim"] = uuid4().hex
+        batch["lease_until"] = (now+timedelta(seconds=60)).isoformat()
+        write_value(db, "witness_outbox", batch)
+        return batch, recovery
+
+
+def _recover_witness(client, headers, comments_url, batch):
+    # Only an unedited comment from this authenticated publisher may be adopted.
+    identity = client.get("https://api.github.com/user", headers=headers, timeout=8, allow_redirects=False)
+    identity.raise_for_status()
+    author = identity.json()["id"]
+    since = (instant(batch["started"])-timedelta(minutes=5)).isoformat()
+    page = 1
+    while True:
+        response = client.get(comments_url, headers=headers, timeout=10, allow_redirects=False,
+                              params={"since":since, "per_page":100, "page":page})
+        response.raise_for_status()
+        items = response.json()
+        if not isinstance(items,list):
+            raise ValueError("Unrecognized issue comment inventory")
+        for c in items:
+            if (c.get("user",{}).get("id")==author and c.get("body")==batch["body"]
+                    and c.get("created_at")==c.get("updated_at")):
+                return c
+        if len(items)<100:
+            return None
+        page += 1
+
+
+def publish(root=None, *, session=None, clock=lambda:datetime.now(timezone.utc)):
     repo = os.environ.get("EPL_EVIDENCE_REPO","")
     issue = os.environ.get("EPL_EVIDENCE_ISSUE","")
     token = os.environ.get("EPL_GITHUB_TOKEN")
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+",repo) or not issue.isdecimal() or not token:
         raise ValueError("Set EPL_EVIDENCE_REPO, EPL_EVIDENCE_ISSUE and EPL_GITHUB_TOKEN for public witnessing.")
+    issue_url = f"https://github.com/{repo}/issues/{issue}"
+    batch, recovery = _claim_witness(root, issue_url, instant(clock()))
+    if not batch:
+        return {"published":0}
     client = session or requests.Session()
+    if session is None:
+        client.trust_env = False
     headers = {"Authorization":"Bearer "+token,"Accept":"application/vnd.github+json"}
     base = "https://api.github.com/repos/"+repo
-    check = client.get(base,timeout=10,headers=headers)
-    check.raise_for_status()
-    if check.json().get("private") is not False:
-        raise ValueError("Evidence must be publicly readable.")
-    with database(root) as db:
-        db.execute("BEGIN IMMEDIATE")
-        reg = read_value(db,"registration")
-        if not reg:
-            raise ValueError("Register a model first.")
-        rows = list(db.execute("SELECT hash,payload FROM captures WHERE hash IS NOT NULL AND evidence IS NULL ORDER BY hash LIMIT 40"))
-        registration = not read_value(db,"registration_evidence")
-        if not rows and not registration:
-            return {"published":0}
-        lines = ["protocol "+digest(reg), canonical(reg)] if registration else []
-        for row in rows:
-            p = json.loads(row["payload"])
-            lines.extend(["forecast "+row["hash"],canonical(_summary(p))])
-        body = "EPL T-24h · SHA-256\n\n" + "\n".join(lines)
-        response = client.post(f"{base}/issues/{issue}/comments",headers=headers,json={"body":body},timeout=15)
-        response.raise_for_status()
-        comment = response.json()
-        stamp = instant(comment["created_at"]).isoformat()
-        if comment["body"] != body or comment["created_at"] != comment["updated_at"]:
+    comments_url = f"{base}/issues/{issue}/comments"
+    try:
+        check = client.get(base,timeout=10,headers=headers,allow_redirects=False)
+        check.raise_for_status()
+        if check.json().get("private") is not False:
+            raise ValueError("Evidence must be publicly readable.")
+        comment = _recover_witness(client, headers, comments_url, batch) if recovery else None
+        if comment is None:
+            # Recovery can take several pages. A second process may have taken
+            # the lease while this one was comparing the public inventory.
+            with database(root) as db:
+                db.execute("BEGIN IMMEDIATE")
+                active = read_value(db,"witness_outbox") or {}
+                if active.get("claim") != batch["claim"]:
+                    return {"published":0,"status":"claim_changed"}
+                active["lease_until"] = (instant(clock())+timedelta(seconds=60)).isoformat()
+                write_value(db,"witness_outbox",active)
+            response = client.post(comments_url,headers=headers,json={"body":batch["body"]},timeout=15)
+            response.raise_for_status()
+            comment = response.json()
+        if (comment["body"] != batch["body"] or comment["created_at"] != comment["updated_at"]
+                or comment["html_url"].split("#")[0] != issue_url):
             raise ValueError("The public witness does not match the submitted hashes.")
-        if registration:
-            write_value(db,"registration_evidence",{"url":comment["html_url"],"at":stamp})
-        db.executemany("UPDATE captures SET evidence=?,witnessed=? WHERE hash=?",
-                       ((comment["html_url"],stamp,r[0]) for r in rows))
-        return {"published":len(rows),"url":comment["html_url"],"at":stamp}
+        comment_api(comment["html_url"])
+        stamp = instant(comment["created_at"]).isoformat()
+        with database(root) as db:
+            db.execute("BEGIN IMMEDIATE")
+            claim = read_value(db,"witness_outbox") or {}
+            if claim.get("claim") != batch["claim"]:
+                return {"published":0,"status":"claim_changed"}
+            if batch["registration"]:
+                write_value(db,"registration_evidence",{"url":comment["html_url"],"at":stamp})
+            db.executemany("UPDATE captures SET evidence=?,witnessed=? WHERE hash=? AND evidence IS NULL",
+                           ((comment["html_url"],stamp,h) for h in batch["hashes"]))
+            db.execute("DELETE FROM state WHERE key='witness_outbox'")
+        return {"published":len(batch["hashes"]),"url":comment["html_url"],"at":stamp}
+    except Exception:
+        with database(root) as db:
+            db.execute("BEGIN IMMEDIATE")
+            claim = read_value(db,"witness_outbox") or {}
+            if claim.get("claim") == batch["claim"]:
+                claim["lease_until"] = instant(clock()).isoformat()
+                write_value(db,"witness_outbox",claim)
+        raise
+    finally:
+        if session is None:
+            client.close()

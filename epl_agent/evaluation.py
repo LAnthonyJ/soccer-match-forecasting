@@ -52,9 +52,10 @@ def public_ledger(root=None):
         records = []
         for row in db.execute("SELECT * FROM captures ORDER BY received,fixture"):
             p = json.loads(row["payload"]) if row["payload"] else None
+            reasons = {k: row[k] for k in ("freeze_reason","market_reason") if k in row.keys() and row[k] is not None}
             records.append({"id":row["fixture"],"kickoff":row["kickoff"],"revision":row["revision"],"observed":row["received"],
                             "reason":row["reason"],"hash":row["hash"],"payload":p,
-                            "evidence":row["evidence"],"witnessed":row["witnessed"]})
+                            "evidence":row["evidence"],"witnessed":row["witnessed"], **reasons})
         return {"registration":reg,"registration_evidence":read_value(db,"registration_evidence"),
                 "public_audit":read_value(db,"public_audit"),
                 "health":read_value(db,"last_capture"),"records":records}
@@ -108,6 +109,131 @@ def _valid_capture(m, row, reg, witness, now):
                 and all(abs(.8*market+.2*a-b) <= 1e-9 for a,market,b in zip(p["a"],p["market"],p["b"])))
     except (KeyError,TypeError,ValueError,OverflowError):
         return False
+
+
+def _independent_reason(match, row, reg, witness, audit, cutoff, now):
+    """Validate A from its own receipt, without consulting any market inputs."""
+    payload = row["payload"]
+    if not _registered(reg, witness):
+        return "unverified_registration"
+    try:
+        prediction = payload["prediction"]
+        observed, frozen = instant(payload["observed"]), instant(payload["frozen"])
+        if (payload["id"] != row["id"] or row["id"] != match["id"]
+                or payload["season"] != match["season"]
+                or instant(payload["kickoff"]) != instant(match["kickoff_utc"])
+                or payload["schedule_revision"] != match.get("schedule_revision", 0)
+                or instant(payload["cutoff"]) != cutoff or instant(row["observed"]) != observed
+                or instant(payload["schedule_observed_at"]) > observed
+                or instant(witness["at"]) > observed
+                or not cutoff-timedelta(minutes=15) <= observed <= frozen <= cutoff
+                or frozen > now or prediction.get("historical_reconstruction")
+                or any(instant(prediction[key]) > observed for key in ("cutoff","trained_through") if prediction.get(key))
+                or payload["model_version"] != reg["model"] or prediction["model_version"] != reg["model"]
+                or not _valid_vector(payload["a"]) or prediction["probs"] != payload["a"]
+                or payload["protocol_hash"] != digest(reg) or digest(payload) != row["hash"]):
+            return "unverified_forecast"
+        if not row.get("evidence") or not row.get("witnessed"):
+            return "missing_witness"
+        comment_api(row["evidence"])
+        witnessed = instant(row["witnessed"])
+        if witnessed > cutoff:
+            return "late_witness"
+        if (row["evidence"].split("#")[0] != witness["url"].split("#")[0]
+                or witnessed < frozen.replace(microsecond=0) or witnessed > now):
+            return "unverified_forecast"
+    except (KeyError,TypeError,ValueError,OverflowError):
+        return "unverified_forecast"
+    if (audit.get("ok") is not True or audit.get("registration_ok") is not True
+            or audit.get("registration_hash") != digest(reg) or audit.get("registration_evidence") != witness
+            or audit.get("forecasts",{}).get(row["hash"]) != {"url":row["evidence"],"at":row["witnessed"]}):
+        return "pending_audit"
+    return None
+
+
+def _independent_report(fixtures, ledger, now, years, *, pilot):
+    reg = ledger.get("registration")
+    witness = ledger.get("registration_evidence")
+    audit = ledger.get("public_audit") or {}
+    captures = defaultdict(list)
+    captured_ids = set()
+    for r in ledger["records"]:
+        captures[r["id"],r["kickoff"],r["revision"]].append(r)
+        captured_ids.add(r["id"])
+    duplicates = Counter(m["id"] for m in fixtures)
+    details = []
+    for m in fixtures:
+        if m["season"] not in years:
+            continue
+        kickoff = instant(m["kickoff_utc"]) if m.get("kickoff_utc") else None
+        cutoff = kickoff-timedelta(days=1) if kickoff else None
+        row = {"id":m["id"],"season":m["season"],"home":m["home"],"away":m["away"],
+               "kickoff":m.get("kickoff_utc"),"cutoff":cutoff.isoformat() if cutoff else None,
+               "actual":None,"a":None,"model_version":None,"evidence":None,"status":"excluded","reason":None,
+               "log_loss":None,"brier":None,"correct":None}
+        details.append(row)
+        if pilot and reg and cutoff and cutoff < instant(reg["created"]):
+            row.update(status="outside_period",reason="before_registration")
+            continue
+        if duplicates[m["id"]] != 1:
+            row["reason"] = "duplicate_fixture"
+            continue
+        if m.get("source_conflict") or m.get("withdrawn"):
+            row["reason"] = "source_conflict" if m.get("source_conflict") else "withdrawn"
+            continue
+        result_seen = instant(m["result_observed_at"]) if m.get("result_observed_at") else None
+        finished = (m["hg"] is not None and m["ag"] is not None
+                    and (not kickoff or kickoff <= now) and (not result_seen or result_seen <= now))
+        if finished:
+            row["actual"] = "H" if m["hg"] > m["ag"] else "A" if m["hg"] < m["ag"] else "D"
+        if not cutoff:
+            row["reason"] = "kickoff_unverified"
+            continue
+        if result_seen and result_seen <= kickoff:
+            row["actual"] = None
+            row["reason"] = "unverified_result"
+            continue
+        candidates = captures[m["id"],m["kickoff_utc"],m.get("schedule_revision",0)]
+        if len(candidates) > 1:
+            row["reason"] = "duplicate_capture"
+            continue
+        if not candidates or not candidates[0]["payload"]:
+            if candidates:
+                row["reason"] = candidates[0].get("freeze_reason") or candidates[0]["reason"]
+            elif m["id"] in captured_ids:
+                row["reason"] = "rescheduled"
+            elif now < cutoff:
+                row.update(status="pending_result",reason="awaiting_cutoff")
+            else:
+                row["reason"] = "no_matching_snapshot"
+            continue
+        entry = candidates[0]
+        reason = _independent_reason(m,entry,reg,witness,audit,cutoff,now)
+        if reason:
+            row["reason"] = reason
+            continue
+        p = entry["payload"]
+        row.update(a=p["a"],model_version=p["model_version"],evidence=entry["evidence"])
+        if not finished:
+            row.update(status="pending_result",reason="pending_result")
+            continue
+        y = "HDA".index(row["actual"])
+        probs = p["a"]
+        row.update(status="scored",reason="scored",log_loss=-math.log(max(probs[y],1e-15)),
+                   brier=sum((v-int(j==y))**2 for j,v in enumerate(probs)),correct=probs.index(max(probs))==y)
+
+    def summarize(rows):
+        eligible = [r for r in rows if r["status"] != "outside_period"]
+        scored = [{"a":r["a"],"y":"HDA".index(r["actual"])} for r in eligible if r["status"]=="scored"]
+        finished = sum(r["actual"] is not None for r in eligible)
+        return {"total":len(rows),"eligible":len(eligible),"finished":finished,"n_scored":len(scored),
+                "coverage":len(scored)/len(eligible) if eligible else None,
+                "finished_coverage":len(scored)/finished if finished else None,
+                "scores":metrics(scored,"a"),
+                "missing":dict(Counter(r["reason"] for r in eligible if r["status"]!="scored"))}
+
+    return {**summarize(details),"rows":details,
+            "seasons":[dict(season=s,**summarize([r for r in details if r["season"]==s])) for s in years]}
 
 
 def _cohort_report(fixtures, ledger, now, years, *, official):
@@ -213,7 +339,7 @@ def _cohort_report(fixtures, ledger, now, years, *, official):
             "worst":sorted(all_rows,key=lambda r:r["b"][r["y"]])[:10]}
 
 
-def formal_report(fixtures, ledger, now=None):
+def formal_report(fixtures, ledger, now=None, *, include_independent=True):
     now = now or datetime.now(timezone.utc)
     fixtures = list(fixtures)
     reg = ledger.get("registration")
@@ -223,4 +349,7 @@ def formal_report(fixtures, ledger, now=None):
     pilot_years = [f"{first}-{str(first+1)[-2:]}"] if first else []
     pilot = _cohort_report(fixtures,ledger,now,pilot_years,official=False)
     report["pilot"] = {key:pilot[key] for key in ("n_pairs","rows","seasons","delta","ci","scores","missing","verification")}
+    if include_independent:
+        report["independent"] = _independent_report(fixtures,ledger,now,years,pilot=False)
+        report["pilot"]["independent"] = _independent_report(fixtures,ledger,now,pilot_years,pilot=True)
     return report
