@@ -26,6 +26,8 @@ function ModelChart({title,probs,kind}:{title:string;probs:Triple|null;kind:stri
 export function Match({f,openAsk}:{f:Fixture;openAsk:(q:string)=>void}) {
   const [reveal,setReveal]=useState(false)
   const p=f.prediction, gap=p?difference(p):null
+  const repository=f.evidence?.match(/^(https:\/\/github\.com\/[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+)\/issues\/\d+#issuecomment-\d+$/)?.[1]
+  const publishedSha=f.trace?.deployed?.sha
   return <article className="match-detail" aria-label="比赛详情">
     <div className="scoreboard">
       <div className="pitch-art" aria-hidden="true"><div/></div>
@@ -78,6 +80,8 @@ export function Match({f,openAsk}:{f:Fixture;openAsk:(q:string)=>void}) {
         版本 {v.revision} · 开球 {fmtTime(v.kickoff)} {v.withdrawn?'已撤回':''} {v.evidence&&<a href={v.evidence}>查看原见证</a>}</li>)}</ul>}
       {f.trace.score&&<p>模型 A 本场对数损失 <b>{num(f.trace.score.log_loss,4)}</b>，Brier <b>{num(f.trace.score.brier,4)}</b>。</p>}
       {f.trace.hash&&<p className="trace-hash">赛前 SHA-256 · <code>{f.trace.hash}</code></p>}
+      {repository&&publishedSha&&/^[0-9a-f]{40}$/.test(publishedSha)&&<a className="ledger"
+        href={repository+'/commit/'+publishedSha} target="_blank" rel="noopener">查看本版比赛记录的固定数据提交 ↗</a>}
     </details>}
     {Boolean(f.source_conflict)&&<p className="notice">两个数据源对赛果的记录不同，本场暂停结算。</p>}
     {f.hg!=null&&f.ag!=null&&<section className="result"><span>赛后结果</span><button aria-expanded={reveal} onClick={()=>setReveal(!reveal)}>{reveal?'隐藏赛果':'查看真实赛果'}</button>

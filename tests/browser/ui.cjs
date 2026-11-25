@@ -276,7 +276,9 @@ for (const width of [360,768,1440]) {
       const response=await route.fetch(), data=await response.json()
       const game=data.fixtures.find(m=>m.id===data.default_id)
       fixtureId=game.id
-      game.trace={revision:2,schedule_history:[],score:{log_loss:0.9163,brier:0.545,correct:true}}
+      game.evidence='https://github.com/example/repo/issues/1#issuecomment-1'
+      game.trace={revision:2,schedule_history:[],score:{log_loss:0.9163,brier:0.545,correct:true},
+        deployed:{seen_at:game.kickoff_utc,sha:'a'.repeat(40)}}
       game.market_note='采集机未配置赔率密钥'
       data.report.pilot={n_pairs:0,seasons:[],independent:{n_scored:1,total:380,eligible:310,finished:1,
         coverage:1/310,finished_coverage:1,scores:{accuracy:1,log_loss:.9163,brier:.545},missing:{},
@@ -296,6 +298,8 @@ for (const width of [360,768,1440]) {
     await page.locator('.rp-record-table tbody button').click()
     await page.getByText(/比赛时间线 · 赛程版本/).click()
     await page.getByText(/模型 A 本场对数损失/).waitFor()
+    assert.equal(await page.getByRole('link',{name:/本版比赛记录的固定数据提交/}).getAttribute('href'),
+      'https://github.com/example/repo/commit/'+'a'.repeat(40))
     await page.getByText('缺少市场报价',{exact:true}).click()
     await page.getByText('采集机未配置赔率密钥',{exact:true}).first().waitFor()
     await layout(page,width)
