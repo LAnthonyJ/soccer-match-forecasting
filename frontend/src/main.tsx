@@ -140,9 +140,10 @@ function App() {
         <button aria-pressed={missingOnly} onClick={()=>{selectSeason(data.health!.season);setMissingOnly(!missingOnly)}}>待补 {data.health.overdue_count} 场</button>
         {Boolean(data.health.schedule_conflict_count||data.health.schedule_unconfirmed_count)&&<span>开球待核实 {(data.health.schedule_conflict_count||0)+(data.health.schedule_unconfirmed_count||0)} 场</span>}
         {data.health.conflict_count>0&&<span>其中 {data.health.conflict_count} 场比分待核实</span>}</div>}
-        {Boolean(data.health?.sources?.length)&&<details className="source-health"><summary>来源与采集状态</summary>
-          <p>已核实赛程连续结算至 {data.health!.settled_through?fmtTime(data.health!.settled_through,true):"尚无完整记录"}。</p>
-          {data.health!.sources!.map(source=><p key={source.provider}>{source.provider} · {source.status==='ok'?'已连通':source.status==='never'?'尚无连通记录':'最近请求失败'} · 上次成功 {fmtTime(source.last_success_at)}</p>)}
+        {(Boolean(data.health?.sources?.length)||data.operations?.publication_status==='credentials_missing')&&<details className="source-health"><summary>来源与采集状态</summary>
+          <p>已核实赛程连续结算至 {data.health?.settled_through?fmtTime(data.health.settled_through,true):"尚无完整记录"}。</p>
+          {data.health?.sources?.map(source=><p key={source.provider}>{source.provider} · {source.status==='ok'?'已连通':source.status==='never'?'尚无连通记录':'最近请求失败'} · 上次成功 {fmtTime(source.last_success_at)}</p>)}
+          {data.operations?.publication_status==='credentials_missing'&&<p>{isStatic()?'本批次记录：公开见证与发布等待 GitHub 授权。':'公开见证与发布等待 GitHub 授权，本机继续采集。'}</p>}
           {data.operations?.heartbeat_at&&<p>批次内采集心跳 {fmtTime(data.operations.heartbeat_at)}</p>}
           {data.operations?.next_cutoff&&<p>下个冻结截止 {fmtTime(data.operations.next_cutoff)}</p>}
           {!!data.health?.overdue_count&&<p>已核实开球超过 24 小时仍有比分待补。</p>}
