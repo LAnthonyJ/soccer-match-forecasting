@@ -131,24 +131,42 @@ test('older seasons, keyboard navigation, real agent',async t=>{
 })
 test('delayed older request cannot overwrite new selection',async t=>{
   const page=await makePage(t,1440,live)
-  const items=page.locator('button.fixture')
-  const one=await items.nth(0).innerText(),two=await items.nth(1).innerText()
-  assert.notEqual(one,two)
-  let release
-  const held=new Promise(resolve=>{release=resolve})
-  let count=0
-  await page.route('**/api/fixtures/*',async route=>{
-    if(++count===1)await held
-    await route.continue().catch(()=>{})
-  })
-  const first=page.waitForRequest('**/api/fixtures/*')
-  await items.nth(0).click()
-  await first
-  await items.nth(1).click()
-  const next=await page.locator('.matchup').innerText()
-  release()
   await page.waitForLoadState('networkidle')
-  assert.equal(await page.locator('.matchup').innerText(),next)
+  const items=page.locator('button.fixture')
+  const [one,two]=await items.evaluateAll(nodes=>nodes.flatMap((button,index)=>
+    button.getAttribute('aria-pressed')==='true'?[]:[{index,teams:Array.from(
+      button.querySelectorAll('.fixture-teams>span'),s=>s.textContent.trim())}]))
+  assert.notDeepEqual(one.teams,two.teams)
+  let release,started
+  const held=new Promise(resolve=>{release=resolve})
+  const olderReady=new Promise(resolve=>{started=resolve})
+  // Deliver the old response even when the application aborts it. This exercises
+  // the selection guard independently of the browser's transport cancellation.
+  await page.evaluate(()=>{
+    const nativeFetch=window.fetch.bind(window)
+    window.fetch=(input,init)=>nativeFetch(input,String(input).includes('/api/fixtures/')?{...init,signal:null}:init)
+  })
+  await page.route('**/api/fixtures/*',async route=>{
+    const response=await route.fetch()
+    started(route.request().url())
+    await held
+    await route.fulfill({response})
+  },{times:1})
+  try {
+    await items.nth(one.index).click()
+    const olderUrl=await olderReady
+    const newerResponse=page.waitForResponse(res=>res.url().includes('/api/fixtures/')&&res.url()!==olderUrl)
+    await items.nth(two.index).click()
+    const newer=await (await newerResponse).json()
+    assert.deepEqual([newer.home_zh,newer.away_zh],two.teams)
+    await page.waitForFunction(expected=>Array.from(document.querySelectorAll('.matchup .side>span:nth-child(2)'),
+      s=>s.textContent).join('|')===expected,two.teams.join('|'))
+    const delayedResponse=page.waitForResponse(olderUrl)
+    release()
+    await delayedResponse
+  }finally{release()}
+  await page.waitForLoadState('networkidle')
+  assert.deepEqual(await page.locator('.matchup .side>span:nth-child(2)').allTextContents(),two.teams)
 })
 test('network failure can be retried; supplied comparison uses percentage points',async t=>{
   const page=await browser.newPage()

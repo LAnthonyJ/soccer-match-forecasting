@@ -8,20 +8,17 @@ on:
 permissions:
   contents: read
   issues: read
-  pages: write
-  id-token: write
 concurrency:
   group: pages
   cancel-in-progress: false
 
 jobs:
-  publish:
+  build:
     env:
       EXPECTED_ISSUE: ${{ github.repository == 'LAnthonyJ/worldcup_prediction' && '1' || vars.EPL_EVIDENCE_ISSUE }}
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      artifact_id: ${{ steps.artifact.outputs.artifact_id }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -77,10 +74,37 @@ jobs:
           else
             python -m epl_agent export site
           fi
-      - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
+        id: artifact
         with:
           path: site
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Confirm the verified build artifact is available
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.build.outputs.artifact_id }}
+        run: |
+          set -euo pipefail
+          [[ "$ARTIFACT_ID" =~ ^[0-9]+$ ]]
+          for attempt in {1..12}; do
+            if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" \
+                --jq ".artifacts[] | select(.id==$ARTIFACT_ID and .name==\"github-pages\" and .expired==false) | .id" | grep -Fxq "$ARTIFACT_ID"; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "The audited Pages artifact is unavailable."
+          exit 1
       - name: Deploy checked site
         id: deployment
         uses: actions/deploy-pages@v4
