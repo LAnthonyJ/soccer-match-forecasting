@@ -195,7 +195,11 @@ test('local and Pages show the same match explanation and last full season',asyn
     const text=await reply.innerText()
     await page.getByRole('button',{name:'过去一季模型比市场好吗？'}).click()
     await reply.filter({hasText:'无法判断'}).waitFor()
-    replies.push([text,await reply.innerText()])
+    // The live report is recomputed on this request; the static report retains its export time.
+    const seasonReply=await reply.innerText()
+    const stamped=seasonReply.match(/^(.*) 数据截至 ([\dT:.+Z-]+)。$/)
+    assert.ok(stamped&&Number.isFinite(Date.parse(stamped[2])),'missing report timestamp')
+    replies.push([text,stamped[1]])
   }
   assert.deepEqual(replies[0],replies[1])
 })

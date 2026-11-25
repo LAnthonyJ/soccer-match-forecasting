@@ -27,8 +27,9 @@ def export_site(directory, snapshot_dir=None):
         raise ValueError("Choose a separate output directory for the Pages build.")
     shutil.copytree(service.STATIC,directory,dirs_exist_ok=True)
     index = directory/"index.html"
-    index.write_text(index.read_text("utf8").replace('name="data-mode" content="server"',
-                                        'name="data-mode" content="static"'),encoding="utf8")
+    html = index.read_text("utf8").replace('name="data-mode" content="server"', 'name="data-mode" content="static"')
+    board_preload = '<link rel="preload" as="fetch" href="./board.json" crossorigin>'
+    index.write_text(html.replace("<head>", "<head>\n"+board_preload, 1),encoding="utf8")
     dashboard = service.dashboard(static=True,snapshot=verified)
     if verified is not None:
         from re import fullmatch
