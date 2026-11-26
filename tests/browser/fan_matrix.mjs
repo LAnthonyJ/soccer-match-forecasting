@@ -14,7 +14,7 @@ import {F, A, STAMP, groups} from './fan_cases.mjs'
 const here=path.dirname(fileURLToPath(import.meta.url))
 const root=path.resolve(here,'../..')
 const {chromium}=createRequire(path.join(root,'frontend/package.json'))('playwright')
-let temp, processHandle, live, site, browser, page, selected, clickCount=0
+let temp, processHandle, live, site, browser, page, selected
 const packets=new Map()
 
 before(async()=>{
@@ -75,14 +75,15 @@ async function endpoint(kind,example,previous){
   assert.equal(body.fact_hash,payload.fact_hash,'page fact hash')
   return body
 }
-async function openAsk(id,reset=false){
-  if(selected===id && !reset)return
-  if(selected===id)await page.reload()
-  else await page.goto(site+'/#/match/'+id)
+async function openAsk(id,reset=false,base=site){
+  const target=base+'/#/match/'+id
+  if(selected===target && !reset)return
+  if(selected===target)await page.reload()
+  else await page.goto(target)
   await page.getByRole('heading',{name:'胜平负预测'}).waitFor()
   await page.getByRole('button',{name:'问这场',exact:true}).click()
   await page.getByLabel('关于这场比赛的提问').waitFor()
-  selected=id
+  selected=target
 }
 async function renderedTurn(question){
   const turn=page.locator('.ai-turn').filter({has:page.getByText(question,{exact:true})}).last()
@@ -90,7 +91,8 @@ async function renderedTurn(question){
   return {answer:await turn.locator('p').first().innerText(),
     answer_fixture_id:await turn.getAttribute('data-answer-fixture-id'),
     as_of:await turn.getAttribute('data-as-of'),topic:await turn.getAttribute('data-topic'),
-    missing_reason:await turn.getAttribute('data-missing-reason')}
+    missing_reason:await turn.getAttribute('data-missing-reason'),
+    evidenceHref:await turn.getByRole('link',{name:'核对资料'}).first().evaluateAll(links=>links[0]?.getAttribute('href'))}
 }
 async function staticAnswer(example,reset){
   await openAsk(example.page,reset)
@@ -135,29 +137,60 @@ test('48 fixed questions use the same fixture, cutoff and values in all three pr
 })
 
 test('every offered question on all ten audited fixtures gives match-specific evidence',async t=>{
+  t.mock.timers.enable({apis:['Date'],now:Date.parse(STAMP)})
   const board=await (await fetch(site+'/board.json')).json()
   assert.equal(board.fixtures.length,10)
   assert.ok(board.fixtures.every(f=>f.prediction?.source==='preview'))
+  const tested={static:0,flask:0,gateway:0}
+  const numbers=text=>text.match(/\d+(?:\.\d+)?/g)||[]
   for(const game of board.fixtures){
     await t.test(game.id,async()=>{
-      await openAsk(game.id,true)
-      const buttons=page.locator('.ai-prompts button')
-      const questions=await buttons.allTextContents()
-      assert.ok(questions.length>0 && questions.length<=3)
-      for(const [i,question] of questions.entries()){
-        assert.doesNotMatch(question,/伤停|首发|停赛|赔率|市场|评分/)
-        await buttons.nth(i).click()
-        const turn=await renderedTurn(question)
+      const packet=await (await fetch(site+'/analysis/facts/'+game.id+'.json')).json()
+      packets.set(game.id,packet)
+      const answers=new Map()
+      function checkTurn(turn){
         assert.equal(turn.answer_fixture_id,game.id)
         assert.equal(Date.parse(turn.as_of),Date.parse(STAMP))
         assert.ok(!turn.missing_reason,turn.answer)
         assert.doesNotMatch(turn.answer,/缺少|暂无|无法回答|尚未连接/)
         assert.match(turn.answer,/\d+(?:\.\d+)?\s*[%球分]/)
-        clickCount++
+      }
+      for(const [kind,base] of [['static',site],['flask',live]]){
+        await openAsk(game.id,true,base)
+        const buttons=page.locator('.ai-prompts button')
+        await buttons.first().waitFor()
+        const questions=await buttons.allTextContents()
+        assert.equal(questions.length,3)
+        if(kind==='flask')assert.deepEqual(questions,[...answers.keys()])
+        for(const [i,question] of questions.entries()){
+          assert.doesNotMatch(question,/伤停|首发|停赛|赔率|市场|评分/)
+          await buttons.nth(i).click()
+          const turn=await renderedTurn(question)
+          checkTurn(turn)
+          assert.ok(turn.evidenceHref?.includes(game.id),turn.evidenceHref)
+          if(kind==='static')answers.set(question,numbers(turn.answer))
+          else assert.deepEqual(numbers(turn.answer),answers.get(question))
+          tested[kind]++
+        }
+      }
+      for(const [question,values] of answers){
+        const reply=await endpoint('Pages Function',{page:game.id,question})
+        checkTurn(reply)
+        assert.equal(reply.answer_fact_hash,packet.fact_hash)
+        assert.ok(reply.evidence?.length)
+        const sources=reply.evidence.map(id=>{
+          const fact=packet.facts.find(f=>f.id===id)
+          assert.ok(fact,'missing published evidence '+id)
+          return fact.text
+        })
+        assert.deepEqual(numbers(reply.answer),numbers(sources.join(' ')))
+        assert.deepEqual(numbers(reply.answer),values)
+        tested.gateway++
       }
     })
   }
-  t.diagnostic('Actual recommended questions clicked: '+clickCount)
+  assert.deepEqual(tested,{static:30,flask:30,gateway:30})
+  t.diagnostic('Recommended questions checked on each route: '+JSON.stringify(tested))
 })
 
 test('an unspecified next match offers choices; selecting an opponent keeps the page and scopes the reply',async t=>{
@@ -184,4 +217,34 @@ test('an unspecified next match offers choices; selecting an opponent keeps the 
   assert.ok(page.url().endsWith('#/match/'+F))
   assert.equal(await page.locator('.ai-turn').last().getByRole('link',{name:/打开这场比赛/}).getAttribute('href'),
     '#/match/'+answer.answer_fixture_id)
+})
+
+test('an ambiguous team probability question keeps its original intent after fixture selection',async t=>{
+  t.mock.timers.enable({apis:['Date'],now:Date.parse(STAMP)})
+  const ambiguous={page:F,question:'阿森纳的胜率是多少？'}
+  const fullName={page:F,question:'阿森纳对曼城的胜平负概率？'}
+  function checkArsenal(turn){
+    assert.equal(turn.topic,'probabilities')
+    assert.equal(turn.answer_fixture_id,A)
+    assert.equal(Date.parse(turn.as_of),Date.parse(STAMP))
+    for(const value of ['44.0%','27.6%','28.4%'])assert.ok(turn.answer.includes(value),turn.answer)
+  }
+  for(const kind of ['Flask','Pages Function']){
+    const first=await endpoint(kind,ambiguous)
+    assert.equal(first.needs_choice,true)
+    assert.ok(first.choices.some(c=>c.id===A))
+    assert.ok(first.choices.some(c=>c.id==='2026-27_brentford_arsenal'))
+    checkArsenal(await endpoint(kind,ambiguous,{fixture_id:A,topic:first.topic}))
+    checkArsenal(await endpoint(kind,fullName))
+  }
+  for(const base of [site,live]){
+    await openAsk(F,true,base)
+    await page.getByLabel('关于这场比赛的提问').fill(ambiguous.question)
+    await page.getByRole('button',{name:'发送',exact:true}).click()
+    const choices=page.locator('.ai-turn').last()
+    await choices.getByRole('button',{name:/曼城/}).click()
+    await page.locator('.ai-turn[data-answer-fixture-id="'+A+'"]').waitFor()
+    checkArsenal(await renderedTurn(ambiguous.question))
+    assert.ok(page.url().endsWith('#/match/'+F))
+  }
 })

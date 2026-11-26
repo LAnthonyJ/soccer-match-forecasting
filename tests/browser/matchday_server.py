@@ -38,6 +38,10 @@ def seed(*, audited_round=False):
                             ag=int(row["ag"]) if row["ag"] else None)
             if game["round"] == 12:
                 game["schedule_status"] = "verified"
+            if game["id"] == "2026-27_brentford_arsenal":
+                # A second confirmed Arsenal fixture exercises non-schedule ambiguity.
+                game.update(date="2026-12-02", kickoff_utc="2026-12-02T20:15:00.000000Z",
+                            schedule_status="verified")
         elif game["round"] == 12:
             game["schedule_status"] = "verified"
             if game["home"] == "Nottingham Forest":

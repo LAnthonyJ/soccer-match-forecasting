@@ -14,6 +14,7 @@ import requests
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from epl_agent import fan, service, snapshot
+from epl_agent.analysis import displayed_percent
 
 DEFAULT_SITE = "https://lanthonyj.github.io/worldcup_prediction"
 CARD_FIELDS = ("id", "season", "round", "date", "home", "away", "hg", "ag", "kickoff_utc", "schedule_status")
@@ -44,6 +45,27 @@ def card(row):
             {key:prediction[key] for key in ("source","cutoff","a")}}
 
 
+def compare_card(row, reference, label):
+    actual = card(row)
+    expected = dict(reference)
+    candidate, baseline = actual.pop("prediction"), expected.pop("prediction")
+    equal(actual,expected,label)
+    if baseline is None or candidate is None or baseline["source"]!="preview":
+        equal(candidate,baseline,label+" prediction")
+        return 0.0
+    for key in ("source","cutoff"):
+        equal(candidate[key],baseline[key],label+" "+key)
+    observed, rebuilt = candidate["a"], baseline["a"]
+    equal(len(observed),3,label+" probability count")
+    equal([displayed_percent(v) for v in observed],[displayed_percent(v) for v in rebuilt],label+" displayed probabilities")
+    # libm on Windows and Ubuntu can differ in the last bits of a freshly
+    # computed preview. The frozen record above must match the file exactly.
+    error = max(abs(a-b) for a,b in zip(observed,rebuilt))
+    if error > 1e-15:
+        raise ValueError(f"{label}: preview probability mismatch, maximum error {error}")
+    return error
+
+
 def verify_round(session, site, expected):
     year, week = expected["current_season"], expected["current_week"]
     board = json.loads(read(session, site+"/board.json"))
@@ -52,17 +74,18 @@ def verify_round(session, site, expected):
     games = {r["id"]:card(r) for r in expected["fixtures"]}
     if not games or len(games) != len(expected["fixtures"]):
         raise ValueError("Invalid fixture set in reference round")
+    maximum_error = 0.0
     filename = f"/rounds/{year}/{fan.round_file(week)}.json"
     for name, rows in (("board",board["fixtures"]), ("round",json.loads(read(session,site+filename)))):
         equal(sorted(row["id"] for row in rows), sorted(games), name+" fixture IDs")
         for row in rows:
-            equal(card(row), games[row["id"]], name+" fixture "+row["id"])
+            maximum_error = max(maximum_error,compare_card(row,games[row["id"]],name+" fixture "+row["id"]))
     for fid, local in games.items():
         detail = json.loads(read(session, site+"/fixtures/"+fid+".json"))
         # A finished, disputed or waiting card uses score state. Only compare
         # the compact projection the app actually renders in that state.
-        equal(card(detail), local, "detail "+fid)
-    return board
+        maximum_error = max(maximum_error,compare_card(detail,local,"detail "+fid))
+    return board, maximum_error
 
 
 def verify_public(site, local, sha, repo, issue):
@@ -89,7 +112,7 @@ def verify_public(site, local, sha, repo, issue):
         dashboard = service.dashboard(static=True,snapshot=batch)
         dashboard["batch_id"] = file_hash
         expected = fan.export_board(dashboard,batch["fixtures"])
-        board = verify_round(session,site,expected)
+        board, maximum_error = verify_round(session,site,expected)
         equal(board["fixed_snapshot_url"],raw,"board fixed download")
         equal(json.loads(read(session,site+"/batch.json")), {"batch_id":file_hash}, "batch marker")
         online = json.loads(read(session,site+"/report.json",32_000_000))
@@ -103,6 +126,7 @@ def verify_public(site, local, sha, repo, issue):
     return {"verified":True,"checked_at":datetime.now(timezone.utc).isoformat(),"site":site,
             "commit":sha,"snapshot_sha256":file_hash,"snapshot":raw,"as_of":batch["as_of"],
             "season":board["current_season"],"week":board["current_week"],"fixtures":board["fixtures"],
+            "max_preview_probability_error":maximum_error,
             "formal_pairs":scores["formal"]["n_pairs"],"pilot_pairs":scores["pilot"]["n_pairs"]}
 
 
@@ -118,7 +142,7 @@ def main():
         receipt = verify_public(args.site,args.snapshot,args.commit,args.repo,args.issue)
     except (OSError,ValueError,KeyError,TypeError,requests.RequestException) as exc:
         parser.exit(1,f"Public round verification failed: {exc}\n")
-    print(json.dumps(receipt,ensure_ascii=False,indent=2))
+    print(json.dumps(receipt,indent=2))
 
 
 if __name__ == "__main__":

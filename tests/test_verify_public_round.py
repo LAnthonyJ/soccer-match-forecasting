@@ -3,7 +3,7 @@ from unittest import TestCase
 from unittest.mock import patch
 import json
 
-from scripts.verify_public_round import verify_round
+from scripts.verify_public_round import card, compare_card, verify_round
 
 
 class PublicRoundTests(TestCase):
@@ -22,7 +22,7 @@ class PublicRoundTests(TestCase):
             return verify_round(None,"",self.board)
 
     def test_every_public_representation_is_compared(self):
-        self.assertEqual(self.run_audit(),self.board)
+        self.assertEqual(self.run_audit(),(self.board,0.0))
         self.assets["/fixtures/"+self.game["id"]+".json"] = dict(self.game,prediction=None)
         with self.assertRaisesRegex(ValueError,"detail"):
             self.run_audit()
@@ -33,3 +33,13 @@ class PublicRoundTests(TestCase):
                 self.assets["/rounds/2026-27/r12.json"] = rows
                 with self.assertRaisesRegex(ValueError,"fixture IDs"):
                     self.run_audit()
+
+    def test_only_machine_roundoff_in_recomputed_previews_is_tolerated(self):
+        p=self.game["prediction"]
+        def changed(delta,source):
+            return dict(self.game,prediction={**p,"source":source,"a":[.38+delta,.25,.37-delta]})
+        self.assertGreater(compare_card(changed(1e-16,"preview"),card(self.game),"preview"),0)
+        with self.assertRaisesRegex(ValueError,"preview probability mismatch"):
+            compare_card(changed(1e-8,"preview"),card(self.game),"preview")
+        with self.assertRaisesRegex(ValueError,"prediction"):
+            compare_card(changed(1e-16,"frozen"),card(changed(0,"frozen")),"frozen")
