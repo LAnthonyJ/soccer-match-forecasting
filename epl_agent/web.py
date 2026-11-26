@@ -1,6 +1,6 @@
 from flask import Flask, abort, jsonify, request, send_from_directory
 
-from . import operations, service
+from . import fan, operations, service
 from .evaluation import public_ledger
 
 
@@ -40,7 +40,21 @@ def create_app():
 
     @app.get("/api/board")
     def board():
-        return jsonify(service.dashboard(compact=True))
+        return jsonify(fan.live_board())
+
+    @app.get("/api/rounds/<season>")
+    def fan_round(season):
+        try:
+            return jsonify(fan.live_round(season,request.args.get("week","")))
+        except KeyError:
+            abort(404)
+
+    @app.get("/api/matches/<fixture_id>")
+    def fan_fixture(fixture_id):
+        try:
+            return jsonify(fan.live_fixture(fixture_id))
+        except KeyError:
+            abort(404)
 
     @app.get("/api/report")
     def report():

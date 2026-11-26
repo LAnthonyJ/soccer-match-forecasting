@@ -1,6 +1,7 @@
 """Build the public evidence a pre-match analysis may cite, independently of settlement."""
 from collections import defaultdict
 from datetime import datetime, timezone
+from decimal import Decimal, ROUND_HALF_UP
 import json
 from pathlib import Path
 import re
@@ -20,6 +21,11 @@ def fact(key, tool, text, stage="prematch"):
     return {"id":key, "tool":tool, "text":text, "stage":stage}
 
 
+def displayed_percent(value):
+    # Match the browser's (value * 100).toFixed(1), including exact halfway cases.
+    return Decimal.from_float(value * 100.).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+
+
 def packet(game, as_of):
     """Construct from an allowlist. hg, ag, later score revisions and questions are never model inputs."""
     fid = game["id"]
@@ -35,21 +41,23 @@ def packet(game, as_of):
         facts.append(fact("protocol_cutoff","fixture",schedule.protocol_window_text(game)))
     if p:
         a = p["a"]
+        percents = [displayed_percent(value) for value in a]
         facts.append(fact("model","prediction",f'{ORIGINS[source]}，独立模型版本为 {p["model_version"]}。'))
         if p.get("trained_through"):
             facts.append(fact("training_cutoff","prediction","训练标签截止 "+p["trained_through"]+"。"))
         if source=="frozen" and trace.get("hash"):
             facts.append(fact("freeze_hash","prediction","赛前预测 SHA-256 为 "+trace["hash"]+"。"))
         facts.append(fact("probabilities","prediction","独立模型 A 给出"+ "、".join(
-            f"{label} {value:.1%}" for label,value in zip(OUTCOMES,a))+"。"))
-        ranked = sorted(range(3),key=a.__getitem__,reverse=True)
+            f"{label} {value:.1f}%" for label,value in zip(OUTCOMES,percents))+"。"))
+        ranked = sorted(range(3),key=percents.__getitem__,reverse=True)
         first, second = ranked[:2]
-        difference = (a[first]-a[second])*100
+        difference = percents[first]-percents[second]
+        tied = [OUTCOMES[i] for i in ranked if percents[i]==percents[first]]
         leaning = (f"{OUTCOMES[first]}概率最高，比{OUTCOMES[second]}高 {difference:.1f} 个百分点。"
-                   if difference >= .05 else f"{OUTCOMES[first]}和{OUTCOMES[second]}的概率在显示精度内持平。")
+                   if difference else "、".join(tied)+"的概率在显示精度内并列居首。")
         facts.append(fact("favourite","prediction",leaning))
         facts.append(fact("draw_margin","prediction",
-            f"平局概率为 {a[1]:.1%}，与概率最高的一项相差 {(a[first]-a[1])*100:.1f} 个百分点。"))
+            f"平局概率为 {percents[1]:.1f}%，与概率最高的一项相差 {percents[first]-percents[1]:.1f} 个百分点。"))
         if p.get("xg"):
             facts.append(fact("expected_goals","prediction",
                 f'按比分分布，模型预计{home}进 {p["xg"][0]:.2f} 球，{away}进 {p["xg"][1]:.2f} 球。'))
@@ -74,10 +82,11 @@ def packet(game, as_of):
         facts.append(fact("probabilities","prediction","暂无可核验的胜平负预测。"))
     if p and p.get("market"):
         quotes = p["market"]
+        market_percents = [displayed_percent(value) for value in quotes]
         facts.append(fact("market","market","同期去水市场概率为"+
-            "、".join(f"{label} {v:.1%}" for label,v in zip(OUTCOMES,quotes))+"。"))
-        market_picks=[i for i,v in enumerate(quotes) if abs(v-max(quotes))<.0005]
-        model_picks=[i for i,v in enumerate(p["a"]) if abs(v-max(p["a"]))<.0005]
+            "、".join(f"{label} {v:.1f}%" for label,v in zip(OUTCOMES,market_percents))+"。"))
+        market_picks=[i for i,v in enumerate(market_percents) if v==max(market_percents)]
+        model_picks=[i for i,v in enumerate(percents) if v==max(percents)]
         if len(market_picks)==len(model_picks)==1:
             facts.append(fact("market_leader","market",f'独立模型最看好{OUTCOMES[model_picks[0]]}，'
                               f'同期市场最看好{OUTCOMES[market_picks[0]]}。'))

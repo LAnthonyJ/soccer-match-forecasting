@@ -1,10 +1,130 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="color-scheme" content="light"><title>AI、隐私与反馈 · 英超观察台</title>
-<style>body{margin:auto;max-width:44rem;padding:2rem 1.25rem;background:#fafaf4;color:#142937;font:1rem/1.8 system-ui,sans-serif}a{color:#195744}h2{margin:1.75rem 0 .25rem;font-size:1.2rem}p{margin:.5rem 0}h1{line-height:1.25}</style></head>
-<body><main><a href="./">返回比赛看板</a><h1>AI、隐私与反馈</h1>
-<h2>预测与赛事分析</h2><p>胜平负概率和预计进球来自足球模型。标有“AI 生成”的报告和追问由 DeepSeek 根据本项目的公开赛事资料组织成文。“基础数据解读”使用本项目模板。每份报告给出适用的比赛、预测阶段、数据截止时间和依据。伤停、首发等未收录的信息会显示资料缺失。</p>
-<h2>提问时会使用什么信息</h2><p>实时分析会向服务端提交比赛编号、问题、当前报告版本及最近三轮对话；启用 DeepSeek 时，提供商会收到处理该问题所需的信息。请只填写赛事问题。本站应用默认仅记录请求编号、错误类型、延迟及用量，限额账本保存匿名访客标识，共享报告公开可读。托管平台及模型服务按各自政策处理网络请求。</p>
-<p>免费公测为报告及追问分别预留额度。模型服务中断或当期额度用完时，已发布报告和基础数据仍可阅读。</p>
-<h2>数据来源</h2><p>历史比分来自 openfootball（CC0），当季合并数据注明 OpenLigaDB（ODbL 1.0）。公开市场信息使用派生概率。每次赛程核准、预测冻结和比分修订可在比赛时间线核对。</p>
-<h2>问题反馈</h2><p>发现时间、数字或界面有误，可在 <a href="https://github.com/LAnthonyJ/worldcup_prediction/issues/new">GitHub 提交反馈</a>。附上比赛链接、页面显示的数据截止时间和重现步骤有助于定位问题。</p></main></body></html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light"><title>数据来源与方法 · 英超观察台</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#f8f8f3;color:#152d39;font:16px/1.75 "PingFang SC","Microsoft YaHei",system-ui,sans-serif}main{max-width:48rem;margin:auto;padding:18px 22px 64px}a{color:#176044;text-underline-offset:.2em}header{margin:12px 0 24px;padding:24px 26px;background:#142f39;color:#fff;border-radius:16px;border-top:4px solid #b9e97a}h1{font-size:clamp(25px,5vw,37px);margin:0}header p{margin:6px 0 0;color:#d7e6df}h2,summary{font-size:1.1rem;font-weight:700}section,details{padding:16px 0;border-bottom:1px solid #d5ddd4}p,h2{margin:0 0 8px}summary,a{min-height:44px;display:inline-flex;align-items:center}summary{display:list-item;cursor:pointer;line-height:44px}nav{display:flex;gap:8px 24px;flex-wrap:wrap}button{min-height:44px;padding:0 14px;border:1px solid #a1b4a8;background:#fff;color:#203a31;border-radius:8px;cursor:pointer}a:focus-visible,button:focus-visible,summary:focus-visible{outline:3px solid #297558;outline-offset:3px}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;font-variant-numeric:tabular-nums}
+  </style>
+</head>
+<body><main>
+  <a id="return" href="./">← 返回英超赛程</a>
+  <header><h1>数据来源与方法</h1><p>了解赛程如何核实、概率如何计算，以及每场分析使用的资料。</p></header>
+  <section id="fixture-record" hidden><h2 id="teams">本场比赛记录</h2>
+    <p id="schedule" role="status">正在读取本场资料…</p><p id="witness"></p>
+    <nav id="match-links" aria-label="本场资料"></nav>
+    <button id="expand-record" type="button" hidden>读取本场完整赛程与见证</button>
+    <p id="batch"></p><nav id="batch-links" aria-label="复算数据"></nav>
+  </section>
+  <section><h2>比赛时间与比分</h2><p>赛程采用 openfootball，当季比分另与 OpenLigaDB 核对。页面按设备时区显示开球时间。资料有冲突时，比赛旁会标记待核实。终场比分以最新已确认的数据为准。</p>
+    <nav><a href="https://github.com/openfootball/england">openfootball · CC0</a><a href="https://www.openligadb.de/en/license">OpenLigaDB · ODbL 1.0</a></nav></section>
+  <section><h2>赛前预测</h2><p>胜平负覆盖常规时间和补时。独立模型使用历史比分、主客场和球队近况估计三种结果的概率。“模型预计进球”取自预测比分分布。预览会随资料变化；符合时间要求的预测在开球前 24 小时冻结。</p>
+    <p>市场对照需要同场、同一时点的合格报价。报告使用去除水分后的派生概率。</p></section>
+  <section><h2>分析、提问与隐私</h2><p>基础数据解读直接引用本场事实。AI 生成的报告会标明 DeepSeek。追问可携带比赛编号、资料版本和最近三轮上下文。伤停或首发缺少可信资料时，回答会说明。请只填写赛事问题。</p>
+    <p>应用记录请求编号、错误类型、延迟及用量。限额账本保存匿名访客标识；共享报告公开可读。实时服务暂不可用时仍可查看已发布资料。</p></section>
+  <details><summary>研究成绩与公开记录</summary><nav><a href="./#/report">查看模型成绩及复算下载</a><a href="https://github.com/LAnthonyJ/worldcup_prediction/issues/1">赛前见证账本</a></nav></details>
+  <details id="ops"><summary>维护与同步状态</summary><pre id="state" role="status"></pre><button type="button" id="retry">刷新状态</button></details>
+  <nav><a href="https://github.com/LAnthonyJ/worldcup_prediction/issues/new">反馈时间、比分或页面问题 ↗</a></nav>
+</main>
+<script>
+  const panel=document.getElementById('ops'),state=document.getElementById('state'),retry=document.getElementById('retry');
+  async function load(){
+    if(retry.disabled)return;
+    retry.disabled=true;state.textContent='正在读取状态…';
+    try{
+      let response=await fetch('./status.json',{cache:'no-cache'});
+      const published=response.ok&&response.headers.get('content-type')?.includes('json');
+      if(!published)response=await fetch('./api/status',{cache:'no-cache'});
+      if(!response.ok)throw Error();
+      const info=await response.json();
+      const time=value=>value?new Date(value).toLocaleString('zh-CN'):'暂无记录';
+      const names={credentials_missing:'发布等待授权',deployed:'已核实上线',pending_deployment:'等待部署',publish_failed:'上传失败',check_failed:'等待重新核实'};
+      state.textContent=[published?'公开批次记录':'本地采集记录','资料截至 '+time(info.snapshot_at||info.as_of),'采集心跳 '+time(info.heartbeat_at),'最近来源连通 '+time(info.last_source_success),'发布状态 '+(names[info.publication_status]||'待核实')].join('\n');
+    }catch{state.textContent='暂时无法读取维护状态。';}finally{retry.disabled=false;}
+  }
+  panel.addEventListener('toggle',()=>{if(panel.open&&!state.textContent)load()});retry.addEventListener('click',load);
+  const fid=new URLSearchParams(location.search).get('fixture');
+  if(fid!==null){
+    const byId=id=>document.getElementById(id);
+    const teams=byId('teams'),schedule=byId('schedule'),witness=byId('witness'),links=byId('match-links'),batch=byId('batch'),files=byId('batch-links'),expand=byId('expand-record');
+    const valid=/^\d{4}-\d{2}_[a-z0-9-]+_[a-z0-9-]+$/.test(fid);
+    byId('fixture-record').hidden=false;
+    if(valid){
+      byId('return').href='./#/match/'+encodeURIComponent(fid);byId('return').textContent='← 返回本场比赛';
+    }
+    function link(parent,label,url,download=false){
+      const a=document.createElement('a');a.href=url;a.textContent=label;if(download)a.download='';
+      parent.append(a);
+    }
+    async function json(url){
+      const res=await fetch(url);
+      if(!res.ok||!res.headers.get('content-type')?.includes('json'))throw Error();
+      return res.json();
+    }
+    function render(game,revision,complete){
+      teams.textContent=(game.home_zh||game.home)+' 对 '+(game.away_zh||game.away);
+      const trace=game.trace||{};
+      const labels={verified:'开球时间已核实',unconfirmed:'开球时间待核实',conflict:'开球时间存在分歧'};
+      const fields=[game.season+' 赛季',labels[game.schedule_status]||'历史赛程'];
+      if(game.kickoff_utc)fields.push(new Date(game.kickoff_utc).toLocaleString('zh-CN',{timeZoneName:'short'}));
+      if(Number.isInteger(revision))fields.push('赛程版本 '+revision);
+      if(game.schedule_source)fields.push('开球时间来源 '+game.schedule_source);
+      schedule.textContent=fields.join(' · ');
+      links.replaceChildren();
+      link(links,'查看本场赛前分析依据','./analysis-evidence.html?fixture='+encodeURIComponent(fid));
+      const source=game.schedule_review?.evidence;
+      if(typeof source==='string'&&/^https:\/\//.test(source))link(links,'核时依据 ↗',source);
+      const url=trace.evidence||game.evidence;
+      if(typeof url==='string'&&/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+#issuecomment-\d+$/.test(url)){
+        const names={late:'见证晚于预测截止',verified:'赛前见证已核验',recorded:'已收到公开见证'};
+        witness.textContent=names[trace.witness_status]||'已记录公开见证';
+        link(links,'查看本场见证评论 ↗',url);
+      }else{
+        witness.textContent=complete?'这一版赛程暂无公开赛前见证。':'本场摘要未附见证，可查完整赛程记录。';
+      }
+    }
+    async function loadMatch(){
+      if(!valid){schedule.textContent='比赛编号无效，请从赛程重新选择比赛。';return;}
+      let board;
+      try{board=await json('./board.json')}catch{}
+      const published=board?.schema==='fan-board/v1';
+      const path=published?'./fixtures/'+fid+'.json':'./api/fixtures/'+fid;
+      files.replaceChildren();
+      if(published&&board.public_snapshot){
+        const fixed=/^https:\/\/raw\.githubusercontent\.com\/[\w.-]+\/[\w.-]+\/[0-9a-f]{40}\/snapshot\.json$/.test(board.fixed_snapshot_url||'');
+        batch.textContent='公开批次截至 '+new Date(board.updated_at).toLocaleString('zh-CN');
+        link(files,fixed?'下载本批次固定快照 JSON':'下载本批次快照 JSON',fixed?board.fixed_snapshot_url:'./snapshot.json',true);
+      }else{
+        batch.textContent=published?'本次导出未绑定已核验的公开快照。':'本地数据随采集更新，本页未绑定固定公开批次。';
+      }
+      link(files,'查看预测账本 JSON',published?'./ledger.json':'./api/ledger');
+      link(files,'查看模型成绩和复算说明','./#/report');
+      try{
+        const game=await json(path);
+        if(game.id!==fid)throw Error();
+        let revision=game.trace?.revision;
+        if(published&&!game.trace){
+          // Recent facts are individual files. A full archived season is read only on demand.
+          try{const facts=await json('./analysis/facts/'+fid+'.json');if(facts.fixture_id===fid)revision=facts.revision}catch{}
+          expand.hidden=false;
+          expand.onclick=async()=>{
+            expand.disabled=true;expand.textContent='正在读取完整赛程…';
+            try{
+              const rows=await json('./seasons/'+fid.slice(0,7)+'.json');
+              const record=rows.find(row=>row.id===fid);
+              if(!record)throw Error();
+              render(record,record.trace?.revision,true);expand.hidden=true;
+            }catch{expand.textContent='读取失败，重新读取完整记录';}
+            finally{expand.disabled=false;}
+          };
+        }
+        render(game,revision,!!game.trace);
+        link(files,'下载本场记录 JSON',path,true);
+      }catch{
+        schedule.textContent='本场资料暂时无法读取，请检查网络或比赛链接。';
+        expand.hidden=false;expand.textContent='重试';expand.onclick=()=>{expand.hidden=true;loadMatch()};
+      }
+    }
+    loadMatch();
+  }
+</script></body></html>

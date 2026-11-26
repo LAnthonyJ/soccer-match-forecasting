@@ -12,13 +12,19 @@ function dates(now,zone) {
 }
 const entry=(title,text,id)=>({title,text,fact_ids:[id]});
 export async function lookupCatalog(env,request,question,now,zone) {
+  return queryCatalog(question,now,zone,async()=>{
+    const res=await env.ASSETS.fetch(new Request(new URL('/analysis/catalog.json',request.url)));
+    if (!res.ok || !res.headers.get('content-type')?.includes('json')) return null;
+    return jsonBody(res,2_500_000);
+  });
+}
+export async function queryCatalog(question,now,zone,load) {
   const schedule=/周末|下场踢|下一场|下轮对手|next match|weekend/i.test(question);
   const season=/20\d\d[-/]\d\d|上赛季|过去一季|试运行成绩|正式赛季/.test(question) && /模型|领先|市场|成绩|战绩|命中率|损失/.test(question);
   const leading=/领先市场|跑赢市场|比市场好|市场相比.*成绩|beat the market/i.test(question);
   if (!schedule && !season && !leading) return null;
-  const res=await env.ASSETS.fetch(new Request(new URL('/analysis/catalog.json',request.url)));
-  if (!res.ok || !res.headers.get('content-type')?.includes('json')) return {sections:[],reason:'catalog_unavailable'};
-  const catalog=await jsonBody(res,2_500_000);
+  const catalog=await load();
+  if (!catalog) return {sections:[],reason:'catalog_unavailable'};
   const sections=[], choices=[];
   if (season) {
     const pilot=question.includes('试运行'),official=question.includes('正式');

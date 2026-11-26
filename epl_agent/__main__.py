@@ -28,8 +28,7 @@ def export_site(directory, snapshot_dir=None):
     shutil.copytree(service.STATIC,directory,dirs_exist_ok=True)
     index = directory/"index.html"
     html = index.read_text("utf8").replace('name="data-mode" content="server"', 'name="data-mode" content="static"')
-    board_preload = '<link rel="preload" as="fetch" href="./board.json" crossorigin>'
-    index.write_text(html.replace("<head>", "<head>\n"+board_preload, 1),encoding="utf8")
+    index.write_text(html.replace('href="/api/board"', 'href="./board.json"'),encoding="utf8")
     dashboard = service.dashboard(static=True,snapshot=verified)
     if verified is not None:
         from re import fullmatch

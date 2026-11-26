@@ -126,6 +126,11 @@ export function cutoffAnswer(facts, question) {
   return field ? renderCalls([{tool:'fixture',ids:[field.id]}],facts) : null;
 }
 export function templateCalls(facts, question, kind) {
+  if (kind==='ask' && /接近|进攻表现|进球更多|近.*进球|近期状态/.test(question)) {
+    const keys=question.includes('接近')?['probabilities','favourite','goals_comparison']:['home_form','away_form'];
+    const ids=keys.filter(id=>facts.some(f=>f.tool==='prediction' && f.id===id));
+    return ids.length?[{tool:'prediction',ids}]:[];
+  }
   const requested=/市场|盘口|赔率|分歧|market/i.test(question)?'market':
     /成绩|赛季|评分|复盘|结算|领先|得了多少分/i.test(question)?'evaluation':
     /赛程|几点|何时|时间|踢谁|周末/i.test(question)?'fixture':

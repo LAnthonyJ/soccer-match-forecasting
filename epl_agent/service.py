@@ -230,10 +230,24 @@ def _current_id(games, now):
     season = max((m["season"] for m in games), default=None)
     scheduled = [m for m in games if m["season"] == season]
     today = now.astimezone(data.LONDON).date().isoformat()
-    future = [m for m in scheduled if m.get("hg") is None and
-              (instant(m["kickoff_utc"])>=now if m.get("kickoff_utc") else m["date"]>=today)]
+    unplayed = [m for m in scheduled if m.get("hg") is None and not m.get("source_conflict") and not m.get("withdrawn")]
+    future = [m for m in unplayed if m.get("schedule_status")=="verified" and m.get("kickoff_utc")
+              and instant(m["kickoff_utc"])>now]
+    if future:
+        return min(future,key=lambda m:(instant(m["kickoff_utc"]),m["id"]))["id"]
+    future = [m for m in unplayed if (m.get("schedule_status")!="verified" or not m.get("kickoff_utc"))
+              and m["date"]>=today]
     key = lambda m:(m["date"],m.get("kickoff_utc") or "",m["id"])
-    chosen = min(future,key=key) if future else max(scheduled,key=key,default=None)
+    if future:
+        return min(future,key=key)["id"]
+    if scheduled and all(m.get("hg") is not None and m.get("ag") is not None
+                         and not m.get("source_conflict") for m in scheduled):
+        # A postponed earlier round can finish after the actual final round.
+        numbered = [(int(label[1]),m) for m in scheduled
+                    if (label:=re.fullmatch(r"第 (\d+) 轮",_week(m)))]
+        if numbered:
+            return max(numbered,key=lambda pair:(pair[0],key(pair[1])))[1]["id"]
+    chosen = max(scheduled,key=key,default=None)
     return chosen["id"] if chosen else None
 
 
@@ -353,6 +367,7 @@ def _attach_trace(games,matches,ledger,report,now,snapshot=None):
 
 
 def export_history_assets(directory, dashboard_dict, *, snapshot=None):
+    from . import fan
     directory = Path(directory)
     def save(path,value):
         path.write_text(json.dumps(value,ensure_ascii=False,separators=(",",":")),encoding="utf8")
@@ -371,7 +386,6 @@ def export_history_assets(directory, dashboard_dict, *, snapshot=None):
         for i,chunk in enumerate(history_pages(rows),1):
             save(page_dir/f"{i}.json",chunk)
     save(directory/"report.json",dashboard_dict["report"])
-    save(directory/"board.json",board_view(dashboard_dict))
     # Older history remains addressable without putting every season in the initial download.
     included = set(dashboard_dict["available_seasons"])
     if snapshot is None:
@@ -384,11 +398,14 @@ def export_history_assets(directory, dashboard_dict, *, snapshot=None):
     captures = {(r["id"],r["kickoff"],r["revision"]):r for r in ledger["records"]}
     previous = {r["id"] for r in ledger["records"]}
     as_of = instant(dashboard_dict["updated_at"])
+    save(directory/"board.json",fan.export_board(dashboard_dict,source))
     replays = _history_for(snapshot)[0]
     season_dir = directory/"seasons"
     season_dir.mkdir(exist_ok=True)
     for year in included:
-        save(season_dir/(year+".json"),[m for m in dashboard_dict["fixtures"] if m["season"]==year])
+        rows = [m for m in dashboard_dict["fixtures"] if m["season"]==year]
+        save(season_dir/(year+".json"),rows)
+        fan.write_season(directory,year,rows,as_of)
     for season in sorted({m["season"] for m in older}):
         rows = []
         for m in older:
@@ -408,6 +425,7 @@ def export_history_assets(directory, dashboard_dict, *, snapshot=None):
                 rows.append(item(m,raw if has_replay else None,**reasons))
         _attach_trace(rows,source,ledger,dashboard_dict["report"],as_of,snapshot)
         (season_dir/(season+".json")).write_text(json.dumps(rows,ensure_ascii=False,separators=(",",":")),encoding="utf8")
+        fan.write_season(directory,season,rows,as_of)
 
 
 def full_report():
@@ -428,12 +446,13 @@ def season_fixtures(season):
     return games
 
 
-def prediction(match_id):
-    matches = fixtures()
+def prediction(match_id, *, matches=None, now=None):
+    if matches is None:
+        matches = fixtures()
     m = next((r for r in matches if r["id"] == match_id),None)
     if not m:
         raise KeyError(match_id)
-    now,ledger = datetime.now(UTC),public_ledger()
+    now,ledger = now or datetime.now(UTC),public_ledger()
     games = _present([m], matches, ledger, now)
     report = formal_report(matches,ledger,now) if any(r["id"]==match_id and r.get("payload") for r in ledger["records"]) else {}
     _attach_trace(games,matches,ledger,report,now)

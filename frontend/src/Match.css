@@ -1,0 +1,59 @@
+.fan-match {display:grid;gap:15px;min-width:0;color:#172e36;font-variant-numeric:tabular-nums}
+.tone-0 {--tone:var(--win)}.tone-1 {--tone:var(--draw)}.tone-2 {--tone:var(--away)}
+.fan-match h2,.fan-match h3,.fan-match h4,.fan-match p {margin:0}
+.fan-matchhead {position:relative;isolation:isolate;overflow:hidden;padding:21px 25px 20px;border-radius:16px;background:#142d39;color:#fffefa}
+.fan-field {position:absolute;z-index:-1;pointer-events:none;inset:-1px 0;overflow:hidden;
+  background:linear-gradient(110deg,#223f4c 0%,#152e39 54%,#173c3c 100%)}
+.fan-field::before,.fan-field::after,.fan-field i {content:"";position:absolute;border:1px solid #a9d0c226}
+.fan-field::before {inset:12px -16px;border-radius:2px}
+.fan-field::after {top:calc(50% - 46px);left:calc(50% - 46px);width:90px;height:90px;border-radius:50%}
+.fan-field i:first-child {height:100%;left:50%;border-width:0 0 0 1px}
+.fan-field i:last-child {top:27%;height:44%;right:-2px;width:28px;border-radius:2px}
+.fan-headline {display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12px;color:#dfe9e3;font-weight:550}
+.fan-headline strong {color:#d4edba;background:#325142;border:1px solid #799c744f;border-radius:20px;padding:3px 10px;font-size:11px}
+.fan-versus {display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:14px;text-align:center;padding:22px 0 18px}
+.fan-hero-team {min-width:0;display:flex;align-items:center;flex-direction:column;gap:5px}
+.fan-hero-team small {font-size:11px;letter-spacing:.12em;font-weight:500;color:#c3d3cf}
+.fan-hero-team strong {font-size:clamp(21px,2.1vw,32px);line-height:1.3;overflow-wrap:anywhere}
+.fan-hero-team .team-mark {display:block;margin:5px 0 0;height:5px;width:25px;border-radius:2px;clip-path:none;background:var(--team);border:1px solid #ffffff57;font-size:0}
+.fan-vs {font:italic 600 18px/1.2 Georgia,serif;color:#b6d1c6}
+.fan-score {font-size:clamp(28px,3vw,42px);font-weight:730;letter-spacing:.02em;white-space:nowrap}
+.fan-kickoff {text-align:center;color:#e5eeea;font-size:12px;line-height:1.6}
+.fan-outlook,.fan-insights,.fan-market {border:1px solid #d8dfd8;border-radius:13px;background:#fffefa}
+.fan-outlook,.fan-insights {padding:18px 22px}
+.fan-outlook>header {display:flex;align-items:center;justify-content:space-between;gap:12px}
+.fan-match h3 {font-size:17px;line-height:1.5;letter-spacing:-.03em;color:#193737}
+.fan-outlook>header span,.fan-insight small,.fan-stamp,.fan-sources {font-size:12px;color:#546863}
+.fan-odds {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));align-items:end;margin:16px 0 9px;gap:8px}
+.fan-odd {display:grid;gap:3px;min-width:0}
+.fan-odd>span {font-size:12px;font-weight:620;overflow-wrap:anywhere}
+.fan-odd>span i {width:6px;height:6px;background:var(--tone);display:inline-block;vertical-align:middle;border-radius:50%;margin-right:4px}
+.fan-odd strong {font:720 clamp(27px,2.7vw,38px)/1.15 "Inter","Segoe UI",sans-serif;letter-spacing:-.045em}
+.fan-odd small {font-size:48%;font-weight:580;letter-spacing:0;margin-left:1px}
+.fan-probbar {height:6px;display:flex;gap:3px;overflow:hidden;border-radius:3px}
+.fan-probbar i {background:var(--tone)}
+.fan-match .fan-judgment {margin:14px 0 5px;line-height:1.65;font-size:15px;font-weight:670;color:#174d3a}
+.fan-stamp,.fan-insight small {line-height:1.65}
+.fan-insight {padding:12px 0;border-bottom:1px solid #e1e7df}
+.fan-insight:last-child {border-bottom:0;padding-bottom:0}
+.fan-insight h4 {font-size:12px;font-weight:610;color:#507168}
+.fan-insight p {font-size:14px;line-height:1.75;margin-top:3px}
+.fan-insight small {font-size:11px}
+.fan-market {padding:0 20px}
+.fan-market summary {min-height:44px;line-height:44px;font-size:14px;font-weight:650;cursor:pointer}
+.fan-market table {width:100%;margin:0 0 10px;border-collapse:collapse;font-size:13px;text-align:right}
+.fan-market th,.fan-market td {padding:8px 0;white-space:nowrap;border-bottom:1px solid var(--line)}
+.fan-market th:first-child,.fan-market td:first-child {text-align:left}
+.fan-market thead th {color:var(--muted);font-size:11px;background:#f1f4ed}
+.fan-market p,.fan-market-note,.fan-match-note {line-height:1.65;color:#526761;font-size:13px}
+.fan-market p {margin-bottom:12px}
+.fan-market-note,.fan-match-note {padding:9px 14px;border-left:3px solid #bdcbbd;background:#edf2e8}
+.fan-sources {display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.fan-sources a {display:inline-flex;align-items:center;min-height:44px;text-decoration:underline;text-underline-offset:4px}
+@media(max-width:650px){
+  .fan-match{gap:10px}.fan-matchhead{padding:14px 15px;border-radius:12px}
+  .fan-versus{gap:6px;padding:13px 0 12px}.fan-hero-team strong{font-size:20px}
+  .fan-hero-team small,.fan-headline,.fan-kickoff{font-size:11px}
+  .fan-outlook,.fan-insights{padding:14px}.fan-odds{margin-top:11px}
+  .fan-match .fan-judgment{margin-top:9px;font-size:14px}
+}

@@ -15,11 +15,11 @@ async function main() {
     });
     if (network?.country!=='CN' || network.asn!==Number(expectedAsn)) throw new Error('Browser egress changed');
     await page.getByRole('heading',{name:'胜平负预测'}).waitFor();
-    await page.getByRole('button',{name:/阅读 AI 赛事分析/}).click();
-    await page.getByLabel('关于这场比赛的追问').fill('这场的赛前概率和主要依据是什么？');
+    await page.getByRole('button',{name:'问这场',exact:true}).click();
+    await page.getByLabel('关于这场比赛的提问').fill('这场的赛前概率和主要依据是什么？');
     const [reply]=await Promise.all([
       page.waitForResponse(r=>r.url()===site+'/api/analysis/ask' && r.request().method()==='POST'),
-      page.getByRole('button',{name:'发送追问'}).click()
+      page.getByRole('button',{name:'发送',exact:true}).click()
     ]);
     if (reply.ok()) {
       const body=await reply.json();
@@ -28,10 +28,13 @@ async function main() {
         result.ai=body.source==='deepseek' && body.model==='deepseek-flash' && body.sections?.length?'deepseek':'fallback';
       }
     }
+    await page.getByRole('button',{name:'展开分析',exact:true}).click();
     await page.getByRole('link',{name:'核对本场分析依据'}).click();
     await page.getByRole('status').filter({hasText:factHash}).waitFor();
     await page.getByRole('link',{name:'返回比赛看板'}).click();
-    await page.getByRole('link',{name:'模型成绩'}).click();
+    await page.getByRole('link',{name:/数据来源与方法/}).last().click();
+    await page.getByText('研究成绩与公开记录',{exact:true}).click();
+    await page.getByRole('link',{name:'查看模型成绩及复算下载'}).click();
     await page.getByLabel('记录来源').selectOption('history');
     // A season download exercises the actual filtered CSV without fetching the whole archive.
     const season=page.getByLabel('记录赛季');

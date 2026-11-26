@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { fmtTime, isStatic, labels, type Fixture } from './data'
+import { forecastLine, localZoneLabel } from './fanFixture'
+import { queryCatalog } from '../../cloudflare/lib/catalog.mjs'
 import './Analysis.css'
 
 type Fact = {id:string;tool:string;text:string;stage:string}
@@ -63,64 +65,128 @@ async function readReport(f:Fixture,signal:AbortSignal):Promise<Report> {
   return fromFacts(packet)
 }
 
+
+async function staticReply(packet:Packet,question:string,signal:AbortSignal):Promise<Turn> {
+  const lookup=await queryCatalog(question,new Date(),Intl.DateTimeFormat().resolvedOptions().timeZone,
+    ()=>json('./analysis/catalog.json',signal))
+  if(lookup)return {question,source:'template',answer:lookup.sections.map(s=>s.text).join(' ')||'赛程资料暂不可用。',choices:lookup.choices}
+  const topic = /伤|停赛|首发|阵容|injur|lineup/i.test(question) ? ['injuries']
+    : /市场|赔率|盘口|分歧/.test(question) ? ['market','market_gap']
+    : /截止|窗口|冻结时间/.test(question) ? ['protocol_cutoff']
+    : /几点|开球|何时|比赛时间/.test(question) ? ['kickoff']
+    : /预计进球|比分分布/.test(question) ? ['expected_goals','goals_comparison']
+    : /近.*(进球|进攻|攻防)|进球更多|进攻表现/.test(question) ? ['home_form','away_form']
+    : /近期|近况|状态/.test(question) ? ['home_form','away_form','form_comparison']
+    : /平局/.test(question) ? ['draw_margin','expected_goals']
+    : /接近|看好|概率|胜|预测|两队|赢|原因|为什么/.test(question) ? ['probabilities','favourite','goals_comparison']
+    : []
+  const answer=topic.flatMap(id=>packet.facts.filter(f=>f.id===id && f.stage==='prematch').map(f=>f.text)).join(' ')
+  return {question,source:'template',answer:answer || '当前资料无法回答这个问题。可以问本场胜平负概率、球队近况或市场比较。'}
+}
+
+function localAnswerTime(text:string) {
+  const iso=/\b\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|\+00:00)\b/g
+  if(!iso.test(text))return text
+  const local=text.replace(iso,time=>fmtTime(time))
+  return local.includes('UTC')?local.replaceAll('UTC',localZoneLabel()):local+'（'+localZoneLabel()+'）'
+}
 export function AnalysisPanel({f,startOpen=false}:{f:Fixture;startOpen?:boolean}) {
-  const [open,setOpen]=useState(startOpen), [report,setReport]=useState<Report|null>(null)
-  const [retry,setRetry]=useState(0),[error,setError]=useState(''),[turns,setTurns]=useState<Turn[]>([])
-  const [question,setQuestion]=useState(''),[pending,setPending]=useState(false),[refresh,setRefresh]=useState(false)
-  const askControl=useRef<AbortController|null>(null)
+  return <FixtureAnalysis key={f.id} f={f} startOpen={startOpen}/>
+}
+
+function FixtureAnalysis({f,startOpen}:{f:Fixture;startOpen:boolean}) {
+  const [tab,setTab]=useState<'report'|'ask'|null>(startOpen?'report':null)
+  const [requested,setRequested]=useState(startOpen),[report,setReport]=useState<Report|null>(null)
+  const [retry,setRetry]=useState(0),[loadFailed,setLoadFailed]=useState(false)
+  const [turns,setTurns]=useState<Turn[]>([]),[question,setQuestion]=useState('')
+  const [sending,setSending]=useState(false),[askError,setAskError]=useState(''),[refresh,setRefresh]=useState(false)
+  const askControl=useRef<AbortController|null>(null), input=useRef<HTMLInputElement>(null)
+  const focusWanted=useRef(false), previousHash=useRef('')
+  const [updateNote,setUpdateNote]=useState('')
   useEffect(()=>{
-    if(!open)return
+    if(!requested)return
     const c=new AbortController()
-    setReport(null);setError('');setRefresh(false);setTurns([]);setQuestion('');setPending(false)
-    readReport(f,c.signal).then(r=>{if(!c.signal.aborted)setReport(r)})
-      .catch(()=>{if(!c.signal.aborted)setError('分析报告暂时无法读取。')})
+    setLoadFailed(false);setReport(null);setAskError('');setSending(false)
+    readReport(f,c.signal).then(next=>{
+      if(c.signal.aborted)return
+      if(previousHash.current && previousHash.current!==next.fact_hash){
+        setTurns([]);setUpdateNote('已载入新版赛前资料，可以用当前问题继续提问。')
+      }
+      previousHash.current=next.fact_hash
+      setReport(next);setRefresh(false)
+    }).catch(()=>{if(!c.signal.aborted)setLoadFailed(true)})
     return ()=>{c.abort();askControl.current?.abort()}
-  },[open,f.id,retry])
-  async function ask(){
-    const q=question.trim()
-    if(!q||!report||pending||refresh)return
+  },[requested,retry,f.id,f.trace?.revision,f.prediction?.source])
+  useEffect(()=>{
+    if(tab==='ask' && report && focusWanted.current){
+      input.current?.focus({preventScroll:true});focusWanted.current=false
+    }
+  },[tab,report])
+  function show(view:'report'|'ask'){
+    setRequested(true);setTab(tab===view?null:view)
+    focusWanted.current=tab!==view && view==='ask'
+  }
+  async function ask(text:string){
+    const q=text.trim()
+    if(!q||!report||sending||refresh)return
     askControl.current?.abort()
     const c=new AbortController();askControl.current=c
-    setPending(true);setError('')
-    try {
-      const history=turns.slice(-3).flatMap(t=>[{role:'user',content:t.question},{role:'assistant',content:t.answer.slice(0,500)}])
-      const reply=await json('/api/analysis/ask',c.signal,{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({fixture_id:f.id,fact_hash:report.fact_hash,question:q,history,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone})})
-      if(c.signal.aborted)return
-      if(reply.fact_hash!==report.fact_hash || reply.fixture_id!==f.id)throw new Error('409')
-      if(typeof reply.answer!=='string'||!reply.answer)throw new Error('answer')
-      setTurns(items=>[...items,{question:q,answer:reply.answer,source:reply.source,reason:reply.fallback_reason,choices:reply.choices}].slice(-6));setQuestion('')
+    setQuestion(q);setSending(true);setAskError('')
+    try{
+      let turn:Turn
+      if(gateway()){
+        const history=turns.slice(-3).flatMap(t=>[{role:'user',content:t.question},{role:'assistant',content:t.answer.slice(0,500)}])
+        const reply=await json('/api/analysis/ask',c.signal,{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({fixture_id:f.id,fact_hash:report.fact_hash,question:q,history,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone})})
+        if(reply.fact_hash!==report.fact_hash || reply.fixture_id!==f.id)throw new Error('409')
+        if(typeof reply.answer!=='string'||!reply.answer)throw new Error('empty')
+        turn={question:q,answer:reply.answer,source:reply.source,reason:reply.fallback_reason,choices:reply.choices}
+      }else{
+        const packet=await staticPacket(f,c.signal)
+        if(packet.fact_hash!==report.fact_hash)throw new Error('409')
+        turn=await staticReply(packet,q,c.signal)
+      }
+      if(!c.signal.aborted){setTurns(items=>[...items,turn].slice(-6));setQuestion('')}
     }catch(err){
       if(!c.signal.aborted){
         const status=err instanceof Error?err.message:''
-        if(status==='409'){setRefresh(true);setError('比赛资料已更新，请重新读取报告后追问。')}
-        else setError(status==='429'?'本次追问额度已用完，已有报告仍可阅读。':'追问暂时未送达。可以保留问题并重试。')
+        if(status==='409'){setRefresh(true);setAskError('本场资料已更新，请读取新版再发送。')}
+        else setAskError(status==='429'?'当前追问额度已用完，原问题已保留。':'追问暂时未送达，原问题已保留。')
       }
-    }finally{if(!c.signal.aborted)setPending(false)}
+    }finally{if(!c.signal.aborted)setSending(false)}
   }
-  return <section className="panel ai-panel" aria-label="赛事分析">
-    <button type="button" className="ai-entry" aria-expanded={open} onClick={()=>setOpen(!open)}>
-      <span>{open?'收起赛事分析':'阅读 AI 赛事分析'}</span><span aria-hidden="true">{open?'−':'＋'}</span></button>
-    {open&&<div className="ai-body">
-      {!report&&!error&&<p role="status">正在读取本场报告…</p>}
-      {report&&<><p className="ai-credit">{report.source==='deepseek'?'AI 生成 · '+(report.model||'DeepSeek'):'基础数据解读 · 模板生成'}
-        {' · '}{f.prediction?labels[f.prediction.source]:'赛程待核实'}</p>
-        <p className="muted">资料截止 {fmtTime(report.as_of)}{f.prediction&&' · '+f.prediction.model_version}</p>
-        {report.source==='deepseek'&&report.generated_at&&<small>报告生成于 {fmtTime(report.generated_at)}</small>}
-        {report.fallback_reason&&notices[report.fallback_reason]&&<p className="muted">{notices[report.fallback_reason]}</p>}
-        {report.sections.map(s=><div className="ai-section" key={s.title}><h4>{s.title}</h4><p>{s.text}</p></div>)}
-        {f.evidence&&<a className="ledger" href={f.evidence} target="_blank" rel="noopener">核对本场赛前见证 ↗</a>}
-        <a className="ledger" href={'./analysis-evidence.html?fixture='+encodeURIComponent(f.id)}>核对本场分析依据</a>
-        {gateway()?<><div aria-live="polite">{turns.map((t,i)=><div key={i} className="ai-turn"><b>{t.question}</b>
-          <p>{t.answer}</p><small>{t.source==='deepseek'?'AI 生成':'基础数据解读'} {t.reason&&notices[t.reason]}</small>
-          {t.choices?.map(c=><p key={c.id}><a href={'#/match/'+encodeURIComponent(c.id)}>{c.label}</a></p>)}</div>)}</div>
-          <form onSubmit={e=>{e.preventDefault();void ask()}}><label>关于这场比赛的追问
-            <input maxLength={350} value={question} onChange={e=>setQuestion(e.target.value)} placeholder="为什么平局概率低于主胜？"/></label>
-            <button disabled={pending||refresh||!question.trim()}>{pending?'正在分析…':'发送追问'}</button></form>
-          <small>实时 AI 每位访客每天最多 5 次。只需填写赛事问题。</small></>:
-          <p className="muted">这里可阅读共享报告。国内实时追问入口待验收。</p>}
+  const form=f.prediction?.form
+  const suggestions=[forecastLine(f,true)==='两队接近'?'两队为什么这么接近？':'这场更看好谁？',
+    form?.home&&form?.away?'两队近期的进攻表现如何？':'本场预计进球是多少？',f.prediction?.market?'市场也这么看吗？':'这场有伤停消息吗？']
+  return <section className="ai-panel" aria-label="赛事分析">
+    <div className="ai-actions">
+      <button type="button" className="ai-entry" aria-expanded={tab==='report'} onClick={()=>show('report')}>{tab==='report'?'收起分析':'展开分析'}<span aria-hidden="true">{tab==='report'?'−':'＋'}</span></button>
+      <button type="button" className="ai-entry ai-ask-toggle" aria-expanded={tab==='ask'} onClick={()=>show('ask')}>问这场<span aria-hidden="true">↗</span></button>
+    </div>
+    {tab&&<div className="ai-body">
+      {!report&&!loadFailed&&<p role="status">正在读取本场资料…</p>}
+      {loadFailed&&<p role="alert">本场分析暂时无法读取。 <button className="ai-link" onClick={()=>setRetry(n=>n+1)}>重新读取报告</button></p>}
+      {report&&tab==='report'&&<>
+        <p className="ai-credit">{report.source==='deepseek'?'AI 生成 · '+(report.model||'DeepSeek'):'基础数据解读 · 模板生成'}{' · '}{f.prediction?labels[f.prediction.source]:'待核实'}</p>
+        <p className="ai-date">数据截止 {fmtTime(report.as_of)} {localZoneLabel()}{report.generated_at&&report.source==='deepseek'?' · 生成于 '+fmtTime(report.generated_at):''}</p>
+        {report.sections.map((s,i)=><div className="ai-section" key={s.title+i}><h4>{s.title}</h4><p>{s.text}</p></div>)}
+        {report.fallback_reason && notices[report.fallback_reason] && <p className="ai-date">{notices[report.fallback_reason]}</p>}
+        <a className="ai-link" href={'./analysis-evidence.html?fixture='+encodeURIComponent(f.id)}>核对本场分析依据</a>
       </>}
-      {error&&<p role="alert">{error} {(!report||refresh)&&<button onClick={()=>setRetry(n=>n+1)}>重新读取报告</button>}</p>}
+      {report&&tab==='ask'&&<>
+        <h3>关于这场比赛</h3>
+        {updateNote&&<p role="status" className="ai-date">{updateNote}</p>}
+        <div className="ai-prompts">{suggestions.map(q=><button disabled={sending||refresh} key={q} onClick={()=>void ask(q)}>{q}</button>)}</div>
+        <div aria-live="polite">{turns.map((t,i)=><div key={i} className="ai-turn"><b>{t.question}</b>
+          <p>{localAnswerTime(t.answer)}</p><small>{t.source==='deepseek'?'AI 生成':'基础数据解读'} {t.reason&&notices[t.reason]}</small>
+          {t.choices?.map(c=><p key={c.id}><a className="ai-link" href={'#/match/'+encodeURIComponent(c.id)}>{localAnswerTime(c.label)}</a></p>)}</div>)}</div>
+        <form onSubmit={e=>{e.preventDefault();void ask(question)}}><label>关于这场比赛的提问
+          <input ref={input} maxLength={350} readOnly={sending} value={question} onChange={e=>{setQuestion(e.target.value);if(!refresh)setAskError('')}} placeholder="例如：平局的机会有多大？"/></label>
+          <button disabled={sending||refresh||!question.trim()}>{sending?'分析中…':'发送'}</button></form>
+        {askError&&<div role="alert" className="ai-feedback">{askError} {refresh
+          ? <button className="ai-link" onClick={()=>setRetry(n=>n+1)}>重新读取报告</button>
+          : <button className="ai-link" onClick={()=>void ask(question)}>重试原问题</button>}</div>}
+      </>}
     </div>}
   </section>
 }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { type Component, type HistoryRow, type MarketRow, type Outcome, type Report as Scores, type Triple,
   fmtTime, isStatic, num, pct, reasons, statusLabels } from './data'
+import './style.css'
 import './ReportStyles.css'
 
 const components:Component[] = ['elo','dc','tree','a']

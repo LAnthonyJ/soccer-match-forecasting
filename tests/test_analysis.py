@@ -43,6 +43,11 @@ class AnalysisTests(unittest.TestCase):
         self.assertTrue(any("probabilities" in s["fact_ids"] for s in report["sections"]))
         fields={"fixture_id":self.fid,"fact_hash":report["fact_hash"],"question":"目前有哪些伤停？","history":[]}
         self.assertIn("缺少",client.post("/api/analysis/ask",json=fields).json["answer"])
+        by_id={f["id"]:f["text"] for f in client.get("/analysis/facts/"+self.fid+".json").json["facts"]}
+        for question,expected in (("两队为什么这么接近？","favourite"),("两队近期的进攻表现如何？","home_form"),
+                                  ("这场几点开球？","kickoff")):
+            answer=client.post("/api/analysis/ask",json={**fields,"question":question}).json["answer"]
+            self.assertIn(by_id[expected],answer)
         self.assertEqual(client.post("/api/analysis/ask",json={**fields,"fact_hash":"0"*64}).status_code,409)
         self.assertEqual(client.get("/api/matches/"+self.fid+"-x/analysis").status_code,404)
         self.assertEqual(client.post("/api/analysis/ask",json={**fields,"history":"bad"}).status_code,400)
@@ -51,6 +56,21 @@ class AnalysisTests(unittest.TestCase):
         with patch.object(service,"ask",return_value={"fixture_id":"other","answer":"阿森纳 对 切尔西","choices":[next_game]}):
             follow=client.post("/api/analysis/ask",json={**fields,"question":"阿森纳下一场踢谁"}).json
             self.assertEqual((follow["fixture_id"],follow["choices"]),(self.fid,[next_game]))
+
+    def test_probability_lead_matches_the_precision_shown_to_fans(self):
+        game=copy.deepcopy(self.game)
+        cases=(
+            ([.33449,.33451,.331],"平局概率最高，比主胜高 0.1 个百分点"),
+            ([.4141,.171,.4149],"客胜概率最高，比主胜高 0.1 个百分点"),
+            ([.412449,.411551,.176],"主胜、平局的概率在显示精度内并列"),
+            ([1/3,1/3,1/3],"主胜、平局、客胜的概率在显示精度内并列"),
+        )
+        for odds,expected in cases:
+            with self.subTest(odds=odds):
+                game["prediction"]["a"]=odds
+                facts={f["id"]:f["text"] for f in analysis.packet(game,self.stamp)["facts"]}
+                self.assertIn(expected,facts["favourite"])
+        self.assertEqual(str(analysis.displayed_percent(.3125)),"31.3")
 
     def test_catalog_and_report_queue_require_confirmed_unplayed_fixtures(self):
         game={**self.game,"hg":None,"ag":None,"schedule_status":"verified"}
