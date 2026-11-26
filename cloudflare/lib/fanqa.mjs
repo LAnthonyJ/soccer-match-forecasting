@@ -1,5 +1,5 @@
 import rules from '../../epl_agent/assets/data/fan_questions.json' with {type:'json'};
-import {queryCatalog} from './catalog.mjs';
+import {queryCatalog,mentionedTeams} from './catalog.mjs';
 
 const patterns=rules.map(rule=>({...rule,regex:new RegExp(rule.pattern,'i')}));
 const fixtureId=/^\d{4}-\d{2}_[a-z0-9-]+_[a-z0-9-]+$/;
@@ -30,12 +30,11 @@ export function suggestedQuestions(facts) {
     available('expected_goals')?'本场预计进球是多少？':null
   ].filter(Boolean).slice(0,3);
 }
-function resolveSides(ctx,q,aliases){
+function resolveSides(ctx,q,teams){
   const sides=['home','away'];
   if(/主队/.test(q))return ['home'];
   if(/客队/.test(q))return ['away'];
   const low=q.toLowerCase();
-  const teams=Object.keys(aliases||{}).filter(team=>[team,...aliases[team]].some(name=>low.includes(name.toLowerCase())));
   if(teams.some(t=>t!==ctx.home && t!==ctx.away))return [];
   const selected=sides.filter(side=>teams.includes(ctx[side]) || [ctx[side],ctx[side+'_zh']].some(name=>name && low.includes(name.toLowerCase())));
   return selected.length?selected:sides;
@@ -71,13 +70,27 @@ export async function answerFanQuestion({packet,question,context,now=new Date(),
     return answer(lookup.sections.map(s=>s.text).join(' '),lookup.sections.flatMap(s=>s.fact_ids),reason.includes('missing')?'missing_'+topic:null,
       {choices,as_of:lookup.as_of||target.as_of,needs_choice:reason==='schedule_choices'});
   }
+  const teams=mentionedTeams(question);
+  const subjects=target.fixture_id.split('_').slice(1);
+  if(teams.some(team=>!subjects.includes(team.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')))){
+    const catalog=await loadCatalog();
+    const games=(catalog?.fixtures||[]).filter(g=>Date.parse(g.kickoff_utc)>now.valueOf() && teams.every(t=>t===g.home || t===g.away))
+      .sort((a,b)=>Date.parse(a.kickoff_utc)-Date.parse(b.kickoff_utc) || a.id.localeCompare(b.id));
+    if(!games.length)return missing('已核实的未来赛程中没有找到所问球队的对阵。');
+    if(games.length>1){
+      const choices=games.slice(0,8).map(g=>({id:g.id,label:g.home_zh+' – '+g.away_zh+' · '+g.kickoff_utc}));
+      return answer('请选择要查询的球队或场次。',['schedule_choices'],null,{choices,needs_choice:true});
+    }
+    target=await loadPacket(games[0].id);
+    if(target.fixture_id!==games[0].id)throw new Error('fixture_mismatch');
+  }
   let facts=target.facts,asOf=target.as_of,ids=rule.ids||[],scope,standings;
   if(scopeTopics.has(topic)){
     scope=/现在|目前|最新|当前|截至今天|此刻/.test(question)?'current':'prematch';
     const info=await loadHistory(target.fixture_id,scope);
     if(!info || info.fixture_id!==target.fixture_id)return missing('本场缺少可核验的球队历史资料。');
     facts=info.facts;asOf=info.as_of;
-    const sides=resolveSides(info,question,(await loadCatalog())?.aliases);
+    const sides=resolveSides(info,question,teams);
     if(!sides.length)return missing('提到的球队不在这场对阵中，请先查询该队的下一场比赛。');
     ids=topic==='h2h'?['h2h']:topic==='standing'&&sides.length===2&&!/两队|双方/.test(question)?['standings']:sides.map(side=>side+(topic==='history'?'_recent':'_standing'));
     if(ids.includes('standings'))standings=info.standings?.rows;

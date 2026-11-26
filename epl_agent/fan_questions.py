@@ -4,7 +4,8 @@ import re
 from datetime import timezone
 from pathlib import Path
 
-from . import analysis, data, service
+from . import analysis, data, schedule, service
+from .market import instant
 
 _RULES = json.loads((Path(__file__).parent / "assets/data/fan_questions.json").read_text("utf8"))
 _TOPICS = {row["topic"]: row for row in _RULES}
@@ -38,9 +39,7 @@ def team_sides(info,question):
         return ["home"]
     if "客队" in question:
         return ["away"]
-    q=question.casefold()
-    teams={team for team,aliases in data.ALIASES.items()
-           if any(str(x).casefold() in q for x in (team,*aliases))}
+    teams=data.mentioned_teams(question)
     if teams-{info["home"],info["away"]}:
         return []
     return [side for side in ("home","away") if info[side] in teams
@@ -79,6 +78,19 @@ def reply(page,question,context,zone):
             key="official_status"
         return answer(lookup["answer"],[key],"missing_schedule" if key=="schedule_missing" else None,
                       choices=choices,needs_choice=key=="schedule_choices")
+    teams=data.mentioned_teams(question)
+    slugs={re.sub(r"[^a-z0-9]+","-",team.casefold()).strip("-") for team in teams}
+    if slugs-set(target["fixture_id"].split("_")[1:]):
+        now=service.datetime.now(timezone.utc)
+        candidates=sorted((m for m in service.fixtures() if schedule.confirmed_unplayed(m)
+                           and instant(m["kickoff_utc"])>now and teams<={m["home"],m["away"]}),
+                          key=lambda m:(m["kickoff_utc"],m["id"]))
+        if not candidates:
+            return missing("已核实的未来赛程中没有找到所问球队的对阵。")
+        if len(candidates)>1:
+            choices=[{"id":m["id"],"label":f"{data.DISPLAY_ZH.get(m['home'],m['home'])} – {data.DISPLAY_ZH.get(m['away'],m['away'])} · {m['kickoff_utc']}"} for m in candidates[:8]]
+            return answer("请选择要查询的球队或场次。",["schedule_choices"],choices=choices,needs_choice=True)
+        target=analysis.live_packet(candidates[0]["id"])
     facts={f["id"]:f for f in target["facts"]}
     ids=rule.get("ids",[])
     stamp=target["as_of"]

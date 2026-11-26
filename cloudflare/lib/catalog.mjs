@@ -1,4 +1,18 @@
 import { jsonBody } from './facts.mjs';
+import clubs from '../../epl_agent/assets/data/club_aliases.json' with {type:'json'};
+
+export function mentionedTeams(question,aliases=clubs){
+  const q=question.toLowerCase();
+  const includes=name=>{
+    const value=name.toLowerCase();
+    if(!value)return false;
+    for(let pos=q.indexOf(value);pos!==-1;pos=q.indexOf(value,pos+1)){
+      if(!/[a-z]/.test(q[pos-1]||'') && !/[a-z]/.test(q[pos+value.length]||''))return true;
+    }
+    return false;
+  };
+  return Object.keys(aliases).filter(team=>[team,...aliases[team]].some(includes));
+}
 
 function localDay(stamp,zone) {
   return new Intl.DateTimeFormat('en-CA',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit'}).format(stamp);
@@ -19,7 +33,7 @@ export async function lookupCatalog(env,request,question,now,zone) {
   });
 }
 export async function queryCatalog(question,now,zone,load) {
-  const schedule=/周末|下场踢|下一场|下轮对手|next match|weekend/i.test(question);
+  const schedule=/周末|下场|下一场|下轮对手|踢谁|next match|weekend/i.test(question);
   const season=/20\d\d[-/]\d\d|上赛季|过去一季|试运行成绩|正式赛季/.test(question) && /模型|领先|市场|成绩|战绩|命中率|损失/.test(question);
   const leading=/领先市场|跑赢市场|比市场好|市场相比.*成绩|beat the market/i.test(question);
   if (!schedule && !season && !leading) return null;
@@ -49,10 +63,7 @@ export async function queryCatalog(question,now,zone,load) {
       ? status[catalog.status]+'，可核验市场配对 '+catalog.n_pairs+' 场。' : '缺少已核验的正式市场比较结论。';
     sections.push(entry('模型成绩',text,'official_status'));
   } else {
-    const q=question.toLowerCase(), teams=new Set();
-    for (const [team,aliases] of Object.entries(catalog.aliases||{})) {
-      if ([team,...aliases].some(s=>s && q.includes(s.toLowerCase()))) teams.add(team);
-    }
+    const teams=new Set(mentionedTeams(question,catalog.aliases||clubs));
     const weekend=/周末|weekend/i.test(question);
     const days=dates(now,zone);
     const games=(catalog.fixtures||[]).filter(f=>Date.parse(f.kickoff_utc)>now.valueOf() &&

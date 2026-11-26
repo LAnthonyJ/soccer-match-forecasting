@@ -20,34 +20,15 @@ UPSTREAM = "https://raw.githubusercontent.com/openfootball/england"
 HISTORY = tuple(f"{year}-{str(year + 1)[-2:]}" for year in range(2000, 2026))
 LONDON = ZoneInfo("Europe/London")
 FIELDS = ["id", "season", "round", "date", "kickoff_utc", "home", "away", "hg", "ag"]
-ALIASES = {
-    "Arsenal": ("阿森纳", "兵工厂"), "Aston Villa": ("阿斯顿维拉", "维拉"),
-    "Bournemouth": ("伯恩茅斯", "AFC Bournemouth"), "Brentford": ("布伦特福德",),
-    "Brighton & Hove Albion": ("布莱顿", "Brighton", "Brighton and Hove Albion"),
-    "Chelsea": ("切尔西",), "Crystal Palace": ("水晶宫",), "Everton": ("埃弗顿",),
-    "Fulham": ("富勒姆",), "Ipswich Town": ("伊普斯维奇", "Ipswich"),
-    "Leeds United": ("利兹联", "Leeds"), "Liverpool": ("利物浦",),
-    "Manchester City": ("曼城", "曼彻斯特城", "Man City"),
-    "Manchester United": ("曼联", "曼彻斯特联", "Man Utd", "Man United"),
-    "Newcastle United": ("纽卡斯尔联", "纽卡斯尔", "纽卡", "Newcastle"),
-    "Nottingham Forest": ("诺丁汉森林", "Nott'm Forest", "Nottm Forest"),
-    "Sunderland": ("桑德兰",), "Tottenham Hotspur": ("托特纳姆热刺", "热刺", "Tottenham", "Spurs"),
-    "West Ham United": ("西汉姆联", "西汉姆", "West Ham"),
-    "Wolverhampton Wanderers": ("狼队", "伍尔弗汉普顿", "Wolves"),
-    "Hull City": ("赫尔城",), "Coventry City": ("考文垂",), "Burnley": ("伯恩利",),
-    "Southampton": ("南安普顿",), "Leicester City": ("莱斯特城", "Leicester"),
-    "Sheffield United": ("谢菲尔德联", "Sheffield Utd"), "Luton Town": ("卢顿", "Luton"),
-    "Watford": ("沃特福德",), "Norwich City": ("诺维奇", "Norwich"),
-    "West Bromwich Albion": ("西布朗", "West Brom"), "Cardiff City": ("卡迪夫城",),
-    "Huddersfield Town": ("哈德斯菲尔德",), "Stoke City": ("斯托克城", "Stoke"),
-    "Swansea City": ("斯旺西",), "Middlesbrough": ("米德尔斯堡",),
-    "Queens Park Rangers": ("女王公园巡游者", "QPR"), "Blackburn Rovers": ("布莱克本",),
-    "Bolton Wanderers": ("博尔顿",), "Wigan Athletic": ("维冈竞技",),
-    "Birmingham City": ("伯明翰",), "Blackpool": ("布莱克浦",), "Portsmouth": ("朴茨茅斯",),
-    "Reading": ("雷丁",), "Derby County": ("德比郡",), "Charlton Athletic": ("查尔顿",),
-    "Bradford City": ("布拉德福德",),
-}
+ALIASES = {team:tuple(names) for team,names in json.loads((ASSETS / "club_aliases.json").read_text("utf8")).items()}
 DISPLAY_ZH = {name: values[0] for name, values in ALIASES.items()}
+
+
+def mentioned_teams(question):
+    text = question.casefold()
+    return {team for team,names in ALIASES.items() if any(
+        re.search(r"(?<![a-z])"+re.escape(name.casefold())+r"(?![a-z])",text)
+        for name in (team,*names))}
 
 
 def _normal(name):

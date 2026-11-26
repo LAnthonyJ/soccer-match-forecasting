@@ -497,13 +497,8 @@ def ask(question, fixture_id=None, zone="Europe/London"):
                          f"{summary['model_loss']:.4f}、{summary['market_loss']:.4f}。")
         status = {"accumulating":"正在积累样本","leading":"在预注册赛季和时点领先","unproven":"尚未证实领先"}
         return score_reply(f"正式评测有 {report['n_pairs']} 场可核验配对，目前{status[report['status']]}。")
-    teams = set()
-    for team,names in data.ALIASES.items():
-        for word in (team,*names):
-            if len(word)>1 and (re.search(r"(?<![a-z])"+re.escape(word.casefold())+r"(?![a-z])",q)):
-                teams.add(team)
-                break
-    next_game = bool(re.search("下一场|下场|下轮对手|next match",q))
+    teams = data.mentioned_teams(q)
+    next_game = bool(re.search("下一场|下场|下轮对手|next match",q)) or ("踢谁" in q and "周末" not in q)
     schedule_lookup = next_game or "周末" in q or "weekend" in q
     if schedule_lookup:
         try:

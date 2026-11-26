@@ -191,7 +191,7 @@ function FixtureAnalysis({f,startOpen,batchId}:{f:Fixture;startOpen:boolean;batc
               {[row.played,row.wins,row.draws,row.losses,row.gf,row.ga,row.points].map((v,j)=><td key={j}>{v}</td>)}</tr>)}</tbody></table></div>}
           {!!t.evidence?.length&&<small>依据 <a href={evidenceUrl(t)}>核对资料</a></small>}
           {t.answer_fixture_id!==f.id&&t.answer_fixture_id&&<a className="ai-link" href={'#/match/'+encodeURIComponent(t.answer_fixture_id)}>打开这场比赛 ↗</a>}<small>{t.source==='deepseek'?'AI 生成':'基础数据解读'} {t.reason&&notices[t.reason]}</small>
-          {t.choices?.map(c=><p key={c.id}><>{t.needs_choice?<button type="button" className="ai-link" disabled={sending||refresh} onClick={()=>void ask("那场几点开球？",{fixture_id:c.id,topic:"schedule"})}>{localAnswerTime(c.label)}</button>:<a className="ai-link" href={'#/match/'+encodeURIComponent(c.id)}>{localAnswerTime(c.label)}</a>}</></p>)}</div>)}</div>
+          {t.choices?.map(c=><p key={c.id}><>{t.needs_choice?<button type="button" className="ai-link" disabled={sending||refresh} onClick={()=>void ask(t.topic==='schedule'?'那场几点开球？':t.question,{fixture_id:c.id,topic:t.topic})}>{localAnswerTime(c.label)}</button>:<a className="ai-link" href={'#/match/'+encodeURIComponent(c.id)}>{localAnswerTime(c.label)}</a>}</></p>)}</div>)}</div>
         <form onSubmit={e=>{e.preventDefault();void ask(question)}}><label>关于这场比赛的提问
           <input ref={input} maxLength={350} readOnly={sending} value={question} onChange={e=>{setQuestion(e.target.value);if(!refresh)setAskError('')}} placeholder="例如：平局的机会有多大？"/></label>
           <button disabled={sending||refresh||!question.trim()}>{sending?'分析中…':'发送'}</button></form>

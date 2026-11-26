@@ -12,6 +12,7 @@
   <header><h1>数据来源与方法</h1><p>了解赛程如何核实、概率如何计算，以及每场分析使用的资料。</p></header>
   <section id="fixture-record" hidden><h2 id="teams">本场比赛记录</h2>
     <p id="schedule" role="status">正在读取本场资料…</p><p id="witness"></p>
+    <details id="single-score" hidden><summary>模型本场评分</summary><p id="single-score-values"></p></details>
     <nav id="match-links" aria-label="本场资料"></nav>
     <button id="expand-record" type="button" hidden>读取本场完整赛程与见证</button>
     <p id="batch"></p><nav id="batch-links" aria-label="复算数据"></nav>
@@ -65,6 +66,9 @@
     function render(game,revision,complete){
       teams.textContent=(game.home_zh||game.home)+' 对 '+(game.away_zh||game.away);
       const trace=game.trace||{};
+      const scored=Number.isFinite(trace.score?.log_loss)&&Number.isFinite(trace.score?.brier);
+      byId('single-score').hidden=!scored;
+      byId('single-score-values').textContent=scored?'独立模型 A 的对数损失为 '+trace.score.log_loss.toFixed(4)+'，Brier 分数为 '+trace.score.brier.toFixed(4)+'。':'';
       const labels={verified:'开球时间已核实',unconfirmed:'开球时间待核实',conflict:'开球时间存在分歧'};
       const fields=[game.season+' 赛季',labels[game.schedule_status]||'历史赛程'];
       if(game.kickoff_utc)fields.push(new Date(game.kickoff_utc).toLocaleString('zh-CN',{timeZoneName:'short'}));
