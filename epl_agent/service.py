@@ -503,7 +503,9 @@ def ask(question, fixture_id=None, zone="Europe/London"):
             if len(word)>1 and (re.search(r"(?<![a-z])"+re.escape(word.casefold())+r"(?![a-z])",q)):
                 teams.add(team)
                 break
-    if "周末" in q or "weekend" in q or "下场" in q or "下一场" in q:
+    next_game = bool(re.search("下一场|下场|下轮对手|next match",q))
+    schedule_lookup = next_game or "周末" in q or "weekend" in q
+    if schedule_lookup:
         try:
             tz = ZoneInfo(zone)
         except (ZoneInfoNotFoundError,ValueError,TypeError):
@@ -523,20 +525,20 @@ def ask(question, fixture_id=None, zone="Europe/London"):
         candidates = matches
     if teams:
         candidates = [m for m in candidates if teams <= {m["home"],m["away"]}]
-    next_game = "下一场" in q or "下场" in q
     selected = None if next_game else next((m for m in candidates if m["id"]==fixture_id),None)
     if not selected:
-        if len(candidates)==1 or (candidates and next_game):
+        if len(candidates)==1 or (teams and candidates and next_game):
             selected = min(candidates,key=lambda r:(instant(r["kickoff_utc"]),r["id"])) if next_game else candidates[0]
         else:
-            ranked = sorted(candidates,key=lambda m:abs((date.fromisoformat(m["date"])-date.today()).days))
+            ranked = (sorted(candidates,key=lambda m:(instant(m["kickoff_utc"]),m["id"])) if schedule_lookup else
+                      sorted(candidates,key=lambda m:abs((date.fromisoformat(m["date"])-date.today()).days)))
             return reply("请选择具体场次。" if ranked else "已收录的赛程中没有找到符合条件的比赛。",
-                         [{"id":m["id"],"label":f"{m['date']} · {m['home']} – {m['away']}"} for m in ranked[:8]])
+                         [{"id":m["id"],"label":f"{data.DISPLAY_ZH.get(m['home'],m['home'])} – {data.DISPLAY_ZH.get(m['away'],m['away'])} · {m.get('kickoff_utc') or m['date']}"} for m in ranked[:8]])
     if re.search(r"截止|采集窗口|冻结窗口|t\s*[-−－]?\s*24",q):
         return {**reply(schedule.protocol_window_text(selected)),"fixture_id":selected["id"]}
-    if next_game or any(s in q for s in ("踢谁","对手","何时","时间","赛程","weekend")) and not trace_question:
+    if schedule_lookup or any(s in q for s in ("踢谁","对手","何时","时间","赛程")) and not trace_question:
         home,away = (data.DISPLAY_ZH.get(selected[k],selected[k]) for k in ("home","away"))
-        choices = [{"id":selected["id"],"label":f"{home} 对 {away}"}] if next_game else []
+        choices = [{"id":selected["id"],"label":f"{home} 对 {away}"}] if schedule_lookup else []
         return {**reply(f"{selected['date']} {home} 对 {away}。开球时间（UTC）：{selected['kickoff_utc'] or '待核实'}。",choices),
                 "fixture_id":selected["id"]}
     game = prediction(selected["id"])

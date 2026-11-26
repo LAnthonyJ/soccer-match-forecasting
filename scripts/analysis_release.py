@@ -52,7 +52,7 @@ def checked_report(report, packet):
         return None
     facts={f["id"]:f for f in packet["facts"] if f["stage"]=="prematch"}
     titles={"fixture":"赛程与时点","prediction":"赛果判断","market":"市场比较","evaluation":"模型成绩"}
-    supplemental={"赛前判断":{"probabilities","favourite"}, "球队近况":{"home_form","away_form","expected_goals"},
+    supplemental={"赛前判断":{"probabilities","favourite","top_scores"}, "球队近况":{"home_form","away_form","expected_goals"},
                   "市场对照":{"market","market_gap","blended_gap"}, "资料边界":{"injuries"}}
     clean=[]
     used=set()

@@ -85,6 +85,7 @@
 .fan-spot-link{width:100%;display:flex;align-items:center;justify-content:space-between;text-align:left;padding:0 14px;border-radius:6px;background:#c3e7a6;color:#203a28;font-weight:700}
 .fan-empty,.fan-loading{line-height:1.65;padding:25px;color:#53675e;font-size:14px}
 .fan-empty button,.fan-loading button{color:var(--fan-green);font-weight:700;margin-left:5px}
+.fan-update-note{padding:8px 12px;color:#64502c;background:#fff4d7;border-radius:6px;font-size:13px}
 .fan-loading{padding:40px 0}.fan-loading p{margin:20px 0}
 .fan-footer{display:flex;align-items:center;justify-content:space-between;gap:10px;border-top:1px solid var(--fan-line);margin-top:32px;padding-block:9px;font-size:12px;color:#677368}
 .fan-footer a{display:inline-flex;align-items:center;gap:8px;min-height:44px;color:#3e5948}

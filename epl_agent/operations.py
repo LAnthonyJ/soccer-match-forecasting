@@ -131,6 +131,12 @@ def status(matches, ledger, health, now, state, *, snapshot_at=None):
                           (snapshot_at is not None and "schedule_status" not in m)))
     next_cutoff = next((dt for dt in cutoffs if dt >= now), None)
     pulse = state.get("heartbeat_at")
+    deployment_seconds = None
+    if (state.get("upload_sha") and state.get("upload_sha")==state.get("deployed_sha")
+            and state.get("upload_at") and state.get("deployed_at")):
+        elapsed = (instant(state["deployed_at"])-instant(state["upload_at"])).total_seconds()
+        if elapsed >= 0:
+            deployment_seconds = elapsed
     return {**state, "worker_status": ("unknown" if not pulse else "offline"
                 if (now-instant(pulse)).total_seconds()>180 else "online"),
             "as_of":now.isoformat(), "snapshot_at":snapshot_at,
@@ -138,7 +144,7 @@ def status(matches, ledger, health, now, state, *, snapshot_at=None):
             "next_cutoff":next_cutoff.isoformat() if next_cutoff else None,
             "pending_witness":sum(bool(r.get("hash") and not r.get("evidence")) for r in ledger["records"]),
             "overdue":health["overdue_count"], "scores_through":health["last_scored_date"],
-            "last_source_success":health["last_sync_at"]}
+            "last_source_success":health["last_sync_at"], "deployment_seconds":deployment_seconds}
 
 
 def local_status():

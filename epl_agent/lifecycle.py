@@ -48,6 +48,15 @@ def attach(games, fixtures, versions, ledger, report, deployments, now):
         if scored.get("status")=="scored":
             trace["score"] = {k:scored.get(k) for k in ("log_loss","brier","correct","actual")}
             trace["score_as_of"] = now.isoformat()
+        if trace["result_at"]:
+            # Use the first committed version of this settlement. Later schedule edits
+            # and later confirmations from another provider must not move its clock.
+            stored = next((v["observed_at"] for v in sorted(history[fid],key=lambda v:v["observed_at"])
+                           if v.get("result_observed_at")==trace["result_at"]
+                           and (v.get("hg"),v.get("ag"))==(m.get("hg"),m.get("ag"))), None)
+            if stored and instant(stored)>=instant(trace["result_at"]):
+                trace["score_committed_at"] = stored
+                trace["score_processing_seconds"] = (instant(stored)-instant(trace["result_at"])).total_seconds()
         game["trace"] = trace
         if trace["score"]:
             score = trace["score"]

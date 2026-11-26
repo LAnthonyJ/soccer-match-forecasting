@@ -6,14 +6,14 @@ import json
 from pathlib import Path
 import re
 
-from . import schedule
+from . import data, schedule, team_history
 from .market import canonical, digest
 
 FIXTURE_ID = re.compile(r"[a-zA-Z0-9_-]{1,180}")
 OUTCOMES = ("主胜", "平局", "客胜")
 ORIGINS = {"preview":"赛前预览", "frozen":"赛前冻结", "replay":"历史回放",
            "reconstruction":"按历史时点重建", "schedule":"仅有赛程"}
-GROUPS = (("赛前判断", ("probabilities", "favourite")), ("球队近况", ("home_form", "away_form", "expected_goals")),
+GROUPS = (("赛前判断", ("probabilities", "favourite", "top_scores")), ("球队近况", ("home_form", "away_form", "expected_goals")),
           ("市场对照", ("market", "market_gap")), ("资料边界", ("injuries",)))
 
 
@@ -56,6 +56,13 @@ def packet(game, as_of):
         leaning = (f"{OUTCOMES[first]}概率最高，比{OUTCOMES[second]}高 {difference:.1f} 个百分点。"
                    if difference else "、".join(tied)+"的概率在显示精度内并列居首。")
         facts.append(fact("favourite","prediction",leaning))
+        scores = sorted(p.get("top_scores") or [], key=lambda item: -item[2])[:3]
+        if scores:
+            values = [(f"{hg}–{ag}", displayed_percent(prob)) for hg,ag,prob in scores]
+            tied_scores = [label for label,percent in values if percent == values[0][1]]
+            leader = ("、".join(tied_scores)+" 在显示精度内并列最高。") if len(tied_scores)>1 else ""
+            text = "最可能的单一比分（主队在前）："+"、".join(f"{label} 约 {percent:.1f}%" for label,percent in values)+"。"
+            facts.append(fact("top_scores","prediction",text+leader))
         facts.append(fact("draw_margin","prediction",
             f"平局概率为 {percents[1]:.1f}%，与概率最高的一项相差 {percents[first]-percents[1]:.1f} 个百分点。"))
         if p.get("xg"):
@@ -100,7 +107,15 @@ def packet(game, as_of):
     facts.append(fact("injuries","fixture","缺少可核实的实时伤停和首发资料。"))
     body = {"schema":"epl-analysis-facts/v1","fixture_id":fid,"revision":trace.get("revision",0),
             "source":source,"facts":facts}
-    return {**body,"fact_hash":digest(body),"as_of":p["cutoff"] if p else as_of}
+    unavailable = {"injuries"}
+    if not p:
+        unavailable.add("probabilities")
+    if not p or not p.get("market"):
+        unavailable.add("market")
+    if not kickoff:
+        unavailable.add("kickoff")
+    available = [f["id"] for f in facts if f["id"] not in unavailable]
+    return {**body,"fact_hash":digest(body),"as_of":p["cutoff"] if p else as_of,"available_topics":available}
 
 
 def template_report(bundle, reason="provider_unconfigured"):
@@ -112,7 +127,8 @@ def template_report(bundle, reason="provider_unconfigured"):
             sections.append({"title":title,"fact_ids":present,"text":"".join(by_key[k] for k in present)})
     return {"fixture_id":bundle["fixture_id"],"fact_hash":bundle["fact_hash"],"as_of":bundle["as_of"],
             "source":"template","model":None,"generated_at":None,"fallback_reason":reason,
-            "answer":"\n".join(s["text"] for s in sections),"sections":sections}
+            "answer":"\n".join(s["text"] for s in sections),"sections":sections,
+            "available_topics":bundle.get("available_topics",[])}
 
 
 def _review(game, stamp):
@@ -145,7 +161,7 @@ def _archive_season(path, dest, stamp):
         review.write("}")
 
 
-def export_assets(directory, dashboard):
+def export_assets(directory, dashboard, *, snapshot=None):
     """Recent fixtures are addressable individually. Archived seasons share one small-file index each."""
     dest = Path(directory)/"analysis"
     for folder in ("facts","archive","reviews","reports"):
@@ -161,10 +177,18 @@ def export_assets(directory, dashboard):
     recent = set(reviews)
     for season, items in reviews.items():
         (dest/"reviews"/(season+".json")).write_text(canonical(items),encoding="utf8")
-    for path in sorted((Path(directory)/"seasons").glob("*.json")):
-        if path.stem in recent or not re.fullmatch(r"20\d{2}-\d{2}",path.stem):
+    season_files = sorted((Path(directory)/"seasons").glob("*.json"))
+    if season_files:
+        from . import service
+        inputs = (service.model_inputs() if snapshot is None else
+                  {"archive":data.load_matches(), "versions":snapshot["versions"]})
+        index = team_history.ResultIndex(**inputs)
+    for path in season_files:
+        if not re.fullmatch(r"20\d{2}-\d{2}",path.stem):
             continue
-        _archive_season(path,dest,stamp)
+        if path.stem not in recent:
+            _archive_season(path,dest,stamp)
+        team_history.export_season(dest,path.stem,json.loads(path.read_bytes()),index,stamp)
     current = next((g for g in games if g["id"]==dashboard.get("current_id")),None)
     ids = []
     if current:

@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 import requests
 from flask import Blueprint, abort, jsonify, request
 
-from . import analysis, service
+from . import analysis, fan_questions, service
 
 bp = Blueprint("analysis",__name__)
 
@@ -40,7 +40,7 @@ def read_analysis(fid):
         abort(404)
     remote = _gateway("/api/matches/"+fid+"/analysis")
     if remote and remote[1]==200 and (remote[0].get("fixture_id"),remote[0].get("fact_hash"))==(fid,bundle["fact_hash"]):
-        return jsonify(remote[0])
+        return jsonify({**remote[0],"available_topics":bundle.get("available_topics")})
     return jsonify(analysis.template_report(bundle, "gateway_snapshot_differs" if remote else "provider_unavailable"))
 
 
@@ -74,26 +74,22 @@ def followup():
         abort(404)
     if version!=bundle["fact_hash"]:
         return jsonify(error="version_changed",fact_hash=bundle["fact_hash"]),409
+    context=body.get("context")
+    if not fan_questions.valid_context(context):
+        return jsonify(error="无效对话目标"),400
     zone=body.get("timezone","Europe/London")
     if not isinstance(zone,str) or len(zone)>80:
         return jsonify(error="无效时区"),400
     remote = _gateway("/api/analysis/ask",{"fixture_id":fid,"question":question,"fact_hash":version,
-                                           "history":history,"timezone":zone})
+                                           "history":history,"timezone":zone,"context":context})
     if remote and (remote[1]!=200 or (remote[0].get("fixture_id"),remote[0].get("fact_hash"))==(fid,version)):
         return jsonify(remote[0]),remote[1]
-    result = analysis.template_report(bundle,"provider_unavailable")
-    if re.search("伤|停赛|首发|阵容|injur|lineup",question,re.I):
-        result["answer"] = next(f["text"] for f in bundle["facts"] if f["id"]=="injuries")
-    elif re.search("接近|进攻表现|进球更多|近.*进球|近期状态",question):
-        keys = (("probabilities","favourite","goals_comparison") if "接近" in question
-                else ("home_form","away_form"))
-        facts = {f["id"]:f["text"] for f in bundle["facts"]}
-        result["answer"] = " ".join(facts[k] for k in keys if k in facts) or "当前缺少可核对的近期比赛资料。"
-    elif re.search("几点|开球|何时|什么时候",question) and not re.search("下一场|下场|周末|截止|窗口",question):
-        result["answer"] = next(f["text"] for f in bundle["facts"] if f["id"]=="kickoff")
-    elif re.search(r"截止|采集窗口|冻结窗口|t\s*[-−－]?\s*24|赛程|踢谁|下一场|下场|周末|评分|战绩|成绩|结算|赛季|市场|赔率|预计|概率|主胜|客胜|平局|看好|进球",question,re.I):
-        lookup = service.ask(question,fid,zone)
-        result.update(answer=lookup["answer"],choices=lookup["choices"])
-    else:
-        result["answer"] = "基础数据解读支持查询胜平负、球队近况、赛程与市场比较。当前实时 AI 追问尚未连接。"
+    try:
+        result = fan_questions.reply(bundle,question,context,zone)
+    except KeyError:
+        return jsonify(error="unknown_fixture"),404
+    except ValueError as exc:
+        if str(exc)=="context_changed":
+            return jsonify(error="context_changed",fact_hash=version),409
+        raise
     return jsonify(result)

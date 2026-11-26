@@ -32,11 +32,11 @@ function ResearchPage({data,open}:{data:FanBoard;open:(id:string)=>void}) {
   useEffect(()=>{
     const c=new AbortController()
     setFailed(false)
-    fetch(isStatic()?'./report.json':'/api/report',{signal:c.signal}).then(async r=>{
+    fetch(isStatic()?'./report.json':'/api/report',{signal:c.signal,cache:'no-cache'}).then(async r=>{
       if(!r.ok)throw new Error();return r.json()
     }).then(r=>{if(!c.signal.aborted)setReport(r)}).catch(()=>{if(!c.signal.aborted)setFailed(true)})
     return ()=>c.abort()
-  },[retry])
+  },[retry,data.batch_id])
   if(failed)return <div role="alert" className="fan-empty">成绩暂时无法读取。 <button onClick={()=>setRetry(n=>n+1)}>重试</button></div>
   if(!report)return <p role="status" className="fan-empty">正在读取研究数据…</p>
   return <Suspense fallback={<p role="status">正在载入成绩页…</p>}><Research r={report} partitioned publicSnapshot={data.public_snapshot} fixedSnapshot={data.fixed_snapshot_url||undefined} openMatch={open}/></Suspense>
@@ -47,6 +47,7 @@ function App(){
   const [round,setRound]=useState<{key:string;games:Fixture[]}|null>(null),[roundError,setRoundError]=useState(''),[roundTry,setRoundTry]=useState(0)
   const [detail,setDetail]=useState<Fixture|null>(null),[detailError,setDetailError]=useState(''),[detailTry,setDetailTry]=useState(0)
   const [now,setNow]=useState(()=>Date.now())
+  const [refreshFailed,setRefreshFailed]=useState(false)
   const [desktop,setDesktop]=useState(()=>window.matchMedia('(min-width: 821px)').matches)
   const pendingScroll=useRef<ReturnPoint|null>(null)
   const listRef=useRef<HTMLDivElement>(null)
@@ -78,6 +79,42 @@ function App(){
     fetchFanBoard(c.signal).then(b=>{if(!c.signal.aborted)setData(b)}).catch(()=>{if(!c.signal.aborted)setBoardError(true)})
     return ()=>c.abort()
   },[boardTry])
+  useEffect(()=>{
+    if(!data?.batch_id)return
+    const c=new AbortController()
+    let checking=false
+    async function check(){
+      if(checking||document.visibilityState==='hidden'||!data)return
+      checking=true
+      try{
+        const res=await fetch(isStatic()?'./batch.json':'/api/batch',{signal:c.signal,cache:'no-store'})
+        if(!res.ok)throw new Error()
+        const marker=await res.json()
+        if(typeof marker.batch_id!=='string'||!marker.batch_id)throw new Error()
+        const due=data.valid_until && Date.parse(data.valid_until)<=Date.now()
+        if(marker.batch_id!==data.batch_id||due){
+          const next=await fetchFanBoard(c.signal,true)
+          if(c.signal.aborted)return
+          if(marker.batch_id!==data.batch_id && next.batch_id===data.batch_id)throw new Error()
+          const current=parse(location.hash)
+          if(current.view==='matches'&&!current.params.has('week') &&
+             (next.current_week!==data.current_week||next.current_season!==data.current_season)){
+            current.params.set('season',data.current_season)
+            current.params.set('week',data.current_week)
+            history.replaceState(history.state,'','#/matches?'+current.params.toString())
+            setNav(parse(location.hash))
+          }
+          setData(next)
+        }
+        if(!c.signal.aborted)setRefreshFailed(false)
+      }catch{if(!c.signal.aborted)setRefreshFailed(true)}
+      finally{checking=false}
+    }
+    const timer=window.setInterval(check,45000)
+    document.addEventListener('visibilitychange',check)
+    window.addEventListener('online',check)
+    return ()=>{c.abort();window.clearInterval(timer);document.removeEventListener('visibilitychange',check);window.removeEventListener('online',check)}
+  },[data])
   const fromBoard=nav.view==='match'&&backPoint.current?parse(backPoint.current.href):nav
   const id=nav.view==='match'?nav.id:nav.view==='ask'?data?.current_id||'':''
   useEffect(()=>{if(id)void loadMatch().catch(()=>{})},[id])
@@ -106,7 +143,7 @@ function App(){
     fetchFanRound(season,week,c.signal).then(rows=>{if(!c.signal.aborted)setRound({key:roundKey,games:rows})})
       .catch(()=>{if(!c.signal.aborted)setRoundError(roundKey)})
     return ()=>c.abort()
-  },[needsRound,roundKey,roundTry])
+  },[needsRound,roundKey,roundTry,data?.batch_id])
   useEffect(()=>{
     if(!id||!data||summaryOnly)return
     const c=new AbortController();setDetailError('')
@@ -165,6 +202,7 @@ function App(){
       <a href="#/matches" className="fan-nav-active">赛程</a>
       <span className="fan-zone">{localZoneLabel()}</span></div></header>
     <main id="fan-content" tabIndex={-1} className={'fan-shell fan-main'+(matchView?' is-match':'')}>
+      {refreshFailed&&<p role="status" className="fan-update-note">暂时无法检查更新，正在显示上次读取的资料。</p>}
       {!data||boardError?<section className="fan-loading" role={boardError?'alert':'status'}><h1>英超赛程</h1>
         <p>{boardError?'赛程暂时无法读取，请检查网络后重试。':'正在读取本轮赛程…'}</p>{boardError&&<button onClick={()=>setBoardTry(n=>n+1)}>重试</button>}</section>:null}
       {fanLayout&&<>{showList&&<div className="fan-pagehead">
@@ -180,7 +218,7 @@ function App(){
         </div>}
         {matchView?<div className="fan-detail-col" ref={detailHeading} tabIndex={-1}>
           <button type="button" className="fan-back" data-testid="back-to-fixtures" onClick={back}><span aria-hidden="true">‹</span> 返回赛程</button>
-          {displayFixture?<Suspense fallback={<p role="status" className="fan-empty">正在载入比赛页面…</p>}><Match key={id} f={displayFixture}/></Suspense>:detailError||!id?<div role="alert" className="fan-empty">{detailError||'无法识别这场比赛。'} <button onClick={()=>setDetailTry(n=>n+1)}>重试</button></div>:
+          {displayFixture?<Suspense fallback={<p role="status" className="fan-empty">正在载入比赛页面…</p>}><Match key={id} f={displayFixture} batchId={data?.batch_id}/></Suspense>:detailError||!id?<div role="alert" className="fan-empty">{detailError||'无法识别这场比赛。'} <button onClick={()=>setDetailTry(n=>n+1)}>重试</button></div>:
             <p role="status" className="fan-empty">正在读取比赛详情…</p>}
         </div>:relevantSpotlight&&<Featured f={spotlight} open={open}/>}
       </div></>}

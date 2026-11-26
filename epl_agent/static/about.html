@@ -39,7 +39,8 @@
       const info=await response.json();
       const time=value=>value?new Date(value).toLocaleString('zh-CN'):'暂无记录';
       const names={credentials_missing:'发布等待授权',deployed:'已核实上线',pending_deployment:'等待部署',publish_failed:'上传失败',check_failed:'等待重新核实'};
-      state.textContent=[published?'公开批次记录':'本地采集记录','资料截至 '+time(info.snapshot_at||info.as_of),'采集心跳 '+time(info.heartbeat_at),'最近来源连通 '+time(info.last_source_success),'发布状态 '+(names[info.publication_status]||'待核实')].join('\n');
+      state.textContent=[published?'公开批次记录':'本地采集记录','资料截至 '+time(info.snapshot_at||info.as_of),'采集心跳 '+time(info.heartbeat_at),'最近来源连通 '+time(info.last_source_success),'比分更新至 '+(info.scores_through||'暂无记录')+' · 逾期待补 '+(info.overdue??'待核实')+' 场','最近批次上传 '+time(info.upload_at),'最近公开部署回读 '+time(info.deployed_at),'发布状态 '+(names[info.publication_status]||'待核实')].join('\n');
+      if(info.deployment_seconds!=null)state.textContent+='\n同批次上传至首次确认上线 '+Math.round(info.deployment_seconds)+' 秒';
     }catch{state.textContent='暂时无法读取维护状态。';}finally{retry.disabled=false;}
   }
   panel.addEventListener('toggle',()=>{if(panel.open&&!state.textContent)load()});retry.addEventListener('click',load);
@@ -69,6 +70,11 @@
       if(game.kickoff_utc)fields.push(new Date(game.kickoff_utc).toLocaleString('zh-CN',{timeZoneName:'short'}));
       if(Number.isInteger(revision))fields.push('赛程版本 '+revision);
       if(game.schedule_source)fields.push('开球时间来源 '+game.schedule_source);
+      if(trace.result_at && game.hg!=null && game.ag!=null)fields.push('收到本版比分 '+new Date(trace.result_at).toLocaleString('zh-CN',{timeZoneName:'short'}));
+      if(game.hg!=null && game.ag!=null){
+        fields.push('上游首次公布终场比分的时刻未提供');
+        if(trace.score_processing_seconds!=null)fields.push('本次确认收录至写入可读记录 '+Math.round(trace.score_processing_seconds)+' 秒');
+      }
       schedule.textContent=fields.join(' · ');
       links.replaceChildren();
       link(links,'查看本场赛前分析依据','./analysis-evidence.html?fixture='+encodeURIComponent(fid));
@@ -91,7 +97,8 @@
       const path=published?'./fixtures/'+fid+'.json':'./api/fixtures/'+fid;
       files.replaceChildren();
       if(published&&board.public_snapshot){
-        const fixed=/^https:\/\/raw\.githubusercontent\.com\/[\w.-]+\/[\w.-]+\/[0-9a-f]{40}\/snapshot\.json$/.test(board.fixed_snapshot_url||'');
+        const fixed=/^https:\/\/raw\.githubusercontent\.com\/[\w.-]+\/[\w.-]+\/[0-9a-f]{40}\/snapshot\.json$/.test(board.fixed_snapshot_url||'') ||
+          /^\.\/snapshots\/[0-9a-f]{64}\.json$/.test(board.fixed_snapshot_url||'');
         batch.textContent='公开批次截至 '+new Date(board.updated_at).toLocaleString('zh-CN');
         link(files,fixed?'下载本批次固定快照 JSON':'下载本批次快照 JSON',fixed?board.fixed_snapshot_url:'./snapshot.json',true);
       }else{

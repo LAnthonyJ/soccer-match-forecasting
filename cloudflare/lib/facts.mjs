@@ -102,7 +102,7 @@ export const readTools = Object.fromEntries(tools.map(tool=>[tool,(facts, ids)=>
   ids.map(id=>facts.find(f=>f.id===id && f.tool===tool))]));
 
 export function viewFor(question) {
-  return /赛后|复盘|完场|最终比分|结算|单场评分|得了多少分|post.?match|final result/i.test(question) &&
+  return /赛后|复盘|完场|最终比分|本场评分|结算|单场评分|得了多少分|post.?match|final result/i.test(question) &&
     !/赛前|隐藏赛果|别剧透|不要剧透|不剧透|pre.?match/i.test(question) ? 'postmatch' : 'prematch';
 }
 const titles={fixture:'赛程与时点',prediction:'赛果判断',market:'市场比较',evaluation:'模型成绩'};
@@ -145,7 +145,7 @@ export function templateCalls(facts, question, kind) {
 export function completeReport(sections,facts) {
   const used=new Set(sections.flatMap(s=>s.fact_ids));
   for (const [title,ids] of [
-    ['赛前判断',['probabilities','favourite']],['球队近况',['home_form','away_form','expected_goals']],
+    ['赛前判断',['probabilities','favourite','top_scores']],['球队近况',['home_form','away_form','expected_goals']],
     ['市场对照',['market','market_gap','blended_gap']],['资料边界',['injuries']]
   ]) {
     const extra=ids.flatMap(id=>used.has(id)?[]:facts.filter(f=>f.id===id));

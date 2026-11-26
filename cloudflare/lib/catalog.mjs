@@ -57,9 +57,9 @@ export async function queryCatalog(question,now,zone,load) {
     const days=dates(now,zone);
     const games=(catalog.fixtures||[]).filter(f=>Date.parse(f.kickoff_utc)>now.valueOf() &&
       [...teams].every(t=>[f.home,f.away].includes(t)) && (!weekend || days.includes(localDay(new Date(f.kickoff_utc),zone))))
-      .sort((a,b)=>Date.parse(a.kickoff_utc)-Date.parse(b.kickoff_utc));
+      .sort((a,b)=>Date.parse(a.kickoff_utc)-Date.parse(b.kickoff_utc) || a.id.localeCompare(b.id));
     if (!games.length) sections.push(entry('赛程','已核实的当前赛季赛程中没有匹配的未来比赛。','schedule_missing'));
-    else if (!teams.size && games.length>1) {
+    else if ((!teams.size || weekend) && games.length>1) {
       for (const game of games.slice(0,8)) choices.push({id:game.id,label:game.home_zh+' – '+game.away_zh+' · '+game.kickoff_utc});
       sections.push(entry('赛程','请选择要查询的球队或场次。','schedule_choices'));
     } else {

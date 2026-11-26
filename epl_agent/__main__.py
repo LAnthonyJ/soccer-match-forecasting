@@ -18,6 +18,21 @@ def output(obj):
     print(json.dumps(obj, ensure_ascii=False, indent=2, allow_nan=False))
 
 
+def _replace_bytes(path, contents):
+    with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as tmp:
+        staged = Path(tmp.name)
+        try:
+            tmp.write(contents)
+        except BaseException:
+            tmp.close()
+            staged.unlink(missing_ok=True)
+            raise
+    try:
+        staged.replace(path)
+    finally:
+        staged.unlink(missing_ok=True)
+
+
 def export_site(directory, snapshot_dir=None):
     from . import snapshot
     verified, snapshot_bytes = snapshot.read_verified(snapshot_dir) if snapshot_dir is not None else (None,None)
@@ -30,8 +45,18 @@ def export_site(directory, snapshot_dir=None):
     html = index.read_text("utf8").replace('name="data-mode" content="server"', 'name="data-mode" content="static"')
     index.write_text(html.replace('href="/api/board"', 'href="./board.json"'),encoding="utf8")
     dashboard = service.dashboard(static=True,snapshot=verified)
+    dashboard["batch_id"] = dashboard["updated_at"]
     if verified is not None:
         from re import fullmatch
+        file_hash = hashlib.sha256(snapshot_bytes).hexdigest()
+        archive = directory / "snapshots" / (file_hash+".json")
+        archive.parent.mkdir(exist_ok=True)
+        if archive.exists():
+            if archive.read_bytes()!=snapshot_bytes:
+                raise ValueError("Stored snapshot does not match its SHA-256")
+        else:
+            _replace_bytes(archive,snapshot_bytes)
+        dashboard.update(batch_id=file_hash, fixed_snapshot_url="./snapshots/"+archive.name)
         sha = os.getenv("SNAPSHOT_SHA","")
         repo = os.getenv("EPL_EVIDENCE_REPO","")
         if fullmatch(r"[0-9a-f]{40}",sha) and fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+",repo):
@@ -41,7 +66,7 @@ def export_site(directory, snapshot_dir=None):
     (directory/"ledger.json").write_text(canonical(verified["ledger"] if verified is not None else public_ledger()),encoding="utf8")
     service.export_history_assets(directory,dashboard,snapshot=verified)
     from .analysis import export_assets
-    export_assets(directory,dashboard)
+    export_assets(directory,dashboard,snapshot=verified)
     if verified is not None:
         (directory/snapshot.NAME).write_bytes(snapshot_bytes)
         (directory/"openligadb.json").write_text(canonical(verified["overlay"]),encoding="utf8")
@@ -50,6 +75,7 @@ def export_site(directory, snapshot_dir=None):
                   "as_of":verified["as_of"],"records":verified["fixtures"]}
         (directory/"merged-seasons.json").write_text(canonical(merged),encoding="utf8")
     (directory/".nojekyll").touch()
+    _replace_bytes(directory/"batch.json",canonical({"batch_id":dashboard["batch_id"]}).encode("utf8"))
     return str(directory.resolve())
 
 

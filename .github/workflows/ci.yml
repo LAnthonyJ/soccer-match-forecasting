@@ -55,3 +55,6 @@ jobs:
       - name: Test the analysis gateway and cost limits offline
         if: matrix.engine == 'chromium'
         run: node --test cloudflare/test/*.test.mjs
+      - name: Verify 48 fan questions on Flask, static Pages and the gateway
+        if: matrix.engine == 'chromium'
+        run: node --test tests/browser/fan_matrix.mjs

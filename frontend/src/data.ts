@@ -62,6 +62,7 @@ export interface FanBoard {
   schema:'fan-board/v1'; fixtures:Fixture[]; current_season:string; current_week:string;
   current_id:string; season_finished:boolean; updated_at:string; week_catalog:Record<string,string[]>;
   team_aliases:Record<string,string[]>; public_snapshot:boolean; fixed_snapshot_url?:string|null;
+  batch_id?:string; valid_until?:string;
 }
 export type Choice = {id:string; label:string}
 export type Answer = {answer:string;choices?:Choice[];fixture_id?:string}
@@ -107,14 +108,14 @@ export async function fetchDash(season?:string, signal?:AbortSignal): Promise<Da
   return result
 }
 let legacyBoard=false
-async function fanJson(url:string,signal:AbortSignal) {
-  const res=await fetch(url,{signal})
+async function fanJson(url:string,signal:AbortSignal,revalidate=false) {
+  const res=await fetch(url,{signal,cache:revalidate?'no-cache':'default'})
   if(res.status===404 || (res.ok && res.headers.get('Content-Type')?.includes('text/html')))return undefined
   if(!res.ok)throw new Error('比赛资料暂不可用')
   return res.json()
 }
-export async function fetchFanBoard(signal:AbortSignal):Promise<FanBoard> {
-  const data=await fanJson(isStatic()?'./board.json':'/api/board',signal) ?? await fetchDash(undefined,signal)
+export async function fetchFanBoard(signal:AbortSignal,revalidate=false):Promise<FanBoard> {
+  const data=await fanJson(isStatic()?'./board.json':'/api/board',signal,revalidate) ?? await fetchDash(undefined,signal)
   if(!Array.isArray(data.fixtures))throw new Error('赛程资料格式异常')
   legacyBoard=data.schema!=='fan-board/v1'
   if(!legacyBoard)return data
@@ -139,14 +140,14 @@ function roundFile(week:string) {
 export async function fetchFanRound(season:string,week:string,signal:AbortSignal):Promise<Fixture[]> {
   if(!/^\d{4}-\d{2}$/.test(season)||!week)throw new Error('无效比赛周')
   const rows=await fanJson(isStatic()?'./rounds/'+season+'/'+roundFile(week)+'.json':
-    '/api/rounds/'+season+'?week='+encodeURIComponent(week),signal)
+    '/api/rounds/'+season+'?week='+encodeURIComponent(week),signal,true)
   if(Array.isArray(rows)&&rows.every(f=>f.season===season&&weekOf(f)===week))return rows
   if(rows===undefined&&legacyBoard)return (await fetchSeasonFixtures(season,signal)).filter(f=>weekOf(f)===week)
   throw new Error('这轮比赛暂时无法读取')
 }
 export async function fetchFanFixture(id:string,signal:AbortSignal):Promise<Fixture> {
   if(!/^\d{4}-\d{2}_[a-z0-9-]+_[a-z0-9-]+$/.test(id))throw new Error('比赛编号无效')
-  let game=await fanJson(isStatic()?'./fixtures/'+id+'.json':'/api/matches/'+id,signal)
+  let game=await fanJson(isStatic()?'./fixtures/'+id+'.json':'/api/matches/'+id,signal,true)
   if(game===undefined&&legacyBoard){
     game=isStatic()?(await fetchSeasonFixtures(id.split('_')[0],signal)).find(f=>f.id===id):
       await fanJson('/api/fixtures/'+id,signal)

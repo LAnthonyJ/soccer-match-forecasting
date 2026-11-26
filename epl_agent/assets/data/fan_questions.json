@@ -1,0 +1,133 @@
+[
+  {
+    "topic": "injuries",
+    "pattern": "伤|停赛|首发|阵容|复出|伤员|injur|line.?up|suspensi",
+    "unavailable": "缺少可核实的实时伤停、停赛和首发资料。"
+  },
+  {
+    "topic": "weather",
+    "pattern": "天气|气温|下雨|风速|weather",
+    "unavailable": "缺少可核实的比赛天气及其影响资料。"
+  },
+  {
+    "topic": "tactics",
+    "pattern": "战术|阵型|教练布置|高位逼抢|tactic",
+    "unavailable": "缺少可核实的本场战术资料。"
+  },
+  {
+    "topic": "player",
+    "pattern": "球员|射手|谁(?:最|更|有|会|能|可能|将|来|先|打入){0,5}(?:进球|破门|得分)|哪位.{0,8}(?:进球|破门)|scorer",
+    "unavailable": "缺少可核实的球员级数据，无法估计个人进球概率。"
+  },
+  {
+    "topic": "live",
+    "pattern": "实时比分|即时比分|比赛分钟|现在几比几|直播",
+    "unavailable": "缺少比赛中的实时比分和事件数据。"
+  },
+  {
+    "topic": "history",
+    "pattern": "最近.{0,5}[五5场]|过去.{0,5}[五5场]|近[五5].{0,4}场|战绩|逐场|last five"
+  },
+  {
+    "topic": "h2h",
+    "pattern": "交锋|交手|上次.{0,5}(碰面|对阵)|head.to.head"
+  },
+  {
+    "topic": "standing",
+    "pattern": "积分榜|排名|排(?:在)?第|第几|联赛积分|多少积分|standings"
+  },
+  {
+    "topic": "schedule",
+    "pattern": "下一?场|下轮对手|周末|next match|weekend|踢谁"
+  },
+  {
+    "topic": "model_results",
+    "pattern": "模型.{0,12}(成绩|表现|市场好|损失|命中率)|上赛季.*市场|正式评测|试运行成绩|领先市场|跑赢市场|beat the market"
+  },
+  {
+    "topic": "cutoff",
+    "pattern": "截止|截点|冻结时|窗口|t[ −-]?24|cutoff|deadline",
+    "ids": [
+      "protocol_cutoff",
+      "kickoff"
+    ]
+  },
+  {
+    "topic": "kickoff",
+    "pattern": "几点|开球|何时|什么时候|比赛时间|kickoff",
+    "ids": [
+      "kickoff"
+    ]
+  },
+  {
+    "topic": "score",
+    "pattern": "单场评分|模型本场评分|本场评分|得了多少分|结算",
+    "ids": [
+      "score"
+    ]
+  },
+  {
+    "topic": "result",
+    "pattern": "最终比分|赛后比分|终场比分|最终赛果|完场比分",
+    "ids": [
+      "result"
+    ]
+  },
+  {
+    "topic": "top_scores",
+    "pattern": "(?:可能|预测|猜测|前三|最看好).{0,12}比分|比分.{0,10}(?:可能|概率|预测|前三)|scoreline",
+    "ids": [
+      "top_scores"
+    ]
+  },
+  {
+    "topic": "market",
+    "pattern": "市场|赔率|盘口|分歧",
+    "ids": [
+      "market",
+      "market_gap",
+      "blended_gap"
+    ]
+  },
+  {
+    "topic": "goals",
+    "pattern": "预计进球|预期进球|模型预计|expected goals",
+    "ids": [
+      "expected_goals",
+      "goals_comparison"
+    ]
+  },
+  {
+    "topic": "form",
+    "pattern": "近况|状态|防守|防线|进攻|场均|进球更多|近.*进球|攻防",
+    "ids": [
+      "home_form",
+      "away_form"
+    ]
+  },
+  {
+    "topic": "draw",
+    "pattern": "平局|打平|draw",
+    "ids": [
+      "probabilities",
+      "draw_margin"
+    ]
+  },
+  {
+    "topic": "probabilities",
+    "pattern": "赛前分析|预测|概率|为什么|胜率|主胜|客胜|更看好|谁赢|机会|接近|看好|胜平负|胜算|谁强|chance",
+    "ids": [
+      "probabilities",
+      "favourite",
+      "goals_comparison"
+    ]
+  },
+  {
+    "topic": "review",
+    "pattern": "赛后|复盘|完场",
+    "ids": [
+      "result",
+      "score"
+    ]
+  }
+]

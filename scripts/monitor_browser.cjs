@@ -28,7 +28,7 @@ async function main() {
         result.ai=body.source==='deepseek' && body.model==='deepseek-flash' && body.sections?.length?'deepseek':'fallback';
       }
     }
-    await page.getByRole('button',{name:'展开分析',exact:true}).click();
+    await page.getByRole('button',{name:/^(AI )?赛前分析$/}).click();
     await page.getByRole('link',{name:'核对本场分析依据'}).click();
     await page.getByRole('status').filter({hasText:factHash}).waitFor();
     await page.getByRole('link',{name:'返回比赛看板'}).click();

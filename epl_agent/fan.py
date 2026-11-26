@@ -1,12 +1,34 @@
 """Small matchday views shared by the live service and the static site."""
 from collections import defaultdict
+from contextlib import closing
 from datetime import datetime, timezone
+import hashlib
 import json
 import re
+import sqlite3
 
 from . import data, service
 from .evaluation import public_ledger
-from .market import instant
+from .market import instant, root_dir
+
+
+def live_revision():
+    """Fingerprint committed fixture and forecast changes, without loading the model."""
+    root = root_dir()
+    parts = []
+    for name, table, query in (
+        ("fixtures", "fixture_versions", "SELECT rowid,observed FROM fixture_versions ORDER BY rowid DESC LIMIT 1"),
+        ("market", "captures", "SELECT fixture,kickoff,revision,hash,evidence,reason FROM captures ORDER BY rowid"),
+    ):
+        path = root / (name + ".sqlite3")
+        if path.exists():
+            with closing(sqlite3.connect(path.resolve().as_uri()+"?mode=ro", uri=True)) as db:
+                if db.execute("SELECT 1 FROM sqlite_master WHERE name=?", (table,)).fetchone():
+                    parts.append(db.execute(query).fetchall())
+    model = service.model_dir()
+    if model:
+        parts.append((model.name,(model/".complete").stat().st_mtime_ns))
+    return hashlib.sha256(json.dumps(parts).encode()).hexdigest()
 
 
 def round_file(week):
@@ -71,13 +93,18 @@ def _live_round(matches, season, week, now):
 
 def live_board():
     now = datetime.now(timezone.utc)
+    revision = live_revision()
     matches = service.fixtures()
     season = max(m["season"] for m in matches)
     active = [m for m in matches if m["season"]==season]
     fid = service._current_id(active,now)
     current = next(m for m in active if m["id"]==fid)
     games = _live_round(matches,season,service._week(current),now)
-    return board_payload(games,season,current,week_catalog(matches),now,finished(active))
+    board = board_payload(games,season,current,week_catalog(matches),now,finished(active))
+    board["batch_id"] = revision
+    if can_preview(current,now):
+        board["valid_until"] = current["kickoff_utc"]
+    return board
 
 
 def live_round(season, week):
@@ -118,5 +145,7 @@ def export_board(full, matches):
     season = max(m["season"] for m in games)
     active = [m for m in games if m["season"]==season]
     current = next(m for m in active if m["id"]==full["current_id"])
-    return board_payload(active,season,current,week_catalog(matches),now,finished(active),
-                         full["public_snapshot"],full.get("fixed_snapshot_url"))
+    board = board_payload(active,season,current,week_catalog(matches),now,finished(active),
+                          full["public_snapshot"],full.get("fixed_snapshot_url"))
+    board["batch_id"] = full.get("batch_id", full["updated_at"])
+    return board

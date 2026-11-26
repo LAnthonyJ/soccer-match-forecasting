@@ -35,7 +35,7 @@ function Highlights({f}:{f:Fixture}) {
   </section>
 }
 
-export function Match({f}:{f:Fixture;openAsk?:(q:string)=>void}) {
+export function Match({f,batchId}:{f:Fixture;batchId?:string;openAsk?:(q:string)=>void}) {
   const phase=fanPhase(f),p=f.prediction
   const home=nameOf(f,'home'), away=nameOf(f,'away')
   const final=phase==='finished'
@@ -59,7 +59,7 @@ export function Match({f}:{f:Fixture;openAsk?:(q:string)=>void}) {
         <p className="fan-stamp">{p.source==='preview'?'赛前预览，仍可能更新':p.source==='frozen'?'赛前已冻结':'按历史时点重建'} · {fmtTime(p.cutoff)} {localZoneLabel()}</p>
       </section>
       <Highlights f={f}/>
-      <AnalysisPanel key={f.id} f={f}/>
+      <AnalysisPanel key={f.id} f={f} batchId={batchId}/>
       <Market f={f}/>
     </>}
     {phase==='scheduled'&&!p&&<p className="fan-match-note">{f.freeze_note||'这场比赛暂时没有可用的赛前预测。'}</p>}

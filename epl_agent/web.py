@@ -42,6 +42,12 @@ def create_app():
     def board():
         return jsonify(fan.live_board())
 
+    @app.get("/api/batch")
+    def batch():
+        response = jsonify(batch_id=fan.live_revision())
+        response.cache_control.no_store = True
+        return response
+
     @app.get("/api/rounds/<season>")
     def fan_round(season):
         try:
@@ -59,6 +65,19 @@ def create_app():
     @app.get("/api/report")
     def report():
         return jsonify(service.full_report())
+
+    @app.get("/api/matches/<fixture_id>/team-history")
+    def team_history(fixture_id):
+        from .team_history import live_context
+        scope = request.args.get("scope","prematch")
+        if scope not in {"prematch","current"}:
+            return jsonify(error="无效的球队资料时点"),400
+        try:
+            return jsonify(live_context(fixture_id,scope,as_of=request.args.get("as_of")))
+        except ValueError:
+            return jsonify(error="无效的球队资料时间"),400
+        except KeyError:
+            abort(404)
 
     @app.get("/api/seasons/<season>")
     def season(season):

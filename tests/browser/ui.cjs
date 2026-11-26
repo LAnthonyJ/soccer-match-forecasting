@@ -59,14 +59,15 @@ const FOREST='2026-27_nottingham-forest_chelsea'
 const ARSENAL='2026-27_arsenal_manchester-city'
 const PAST='2026-27_fulham_manchester-united'
 const STAMP='2026-11-26T08:00:00Z'
-async function open(t,width,url) {
+async function open(t,width,url,withTimers=false) {
   const page=await browser.newPage({viewport:{width,height:width===360?800:960},isMobile:width<=768,
     hasTouch:width<=768,locale:'zh-CN',timezoneId:'Asia/Shanghai'})
   page.setDefaultTimeout(8000)
   const errors=[]
   page.on('pageerror',err=>errors.push(err.message))
   t.after(async()=>{await page.close();assert.deepEqual(errors,[])})
-  await page.clock.setFixedTime(new Date(STAMP))
+  if(withTimers)await page.clock.install({time:new Date(STAMP)})
+  else await page.clock.setFixedTime(new Date(STAMP))
   if(url)await page.goto(url)
   return page
 }
@@ -74,6 +75,52 @@ async function fits(page,width) {
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth)<=width+1,'horizontal overflow')
 }
 const row=(p,id)=>p.locator('[data-fixture-id="'+id+'"]')
+test('a changed batch updates an open match, retains its filters and recovers a delayed result',async t=>{
+  const p=await open(t,360,undefined,true)
+  const kickoff='2026-11-24T20:00:00Z'
+  let revision=0,offline=false,boardReads=0,markerReads=0
+  await p.route('**/batch.json',r=>{
+    markerReads++
+    return offline?r.abort():r.fulfill({json:{batch_id:'batch-'+revision}})
+  })
+  await p.route('**/board.json',async r=>{
+    boardReads++
+    const board=await (await r.fetch()).json()
+    board.batch_id='batch-'+revision
+    const game=board.fixtures.find(f=>f.id===FOREST)
+    Object.assign(game,{kickoff_utc:kickoff,prediction:null,source_conflict:revision===2,
+      hg:revision===0?null:revision===1?2:1,ag:revision===0?null:1})
+    await r.fulfill({json:board})
+  })
+  await p.goto(pages)
+  await p.getByLabel('搜索球队',{exact:true}).fill('Chelsea')
+  await row(p,FOREST).click()
+  const match=p.getByRole('article',{name:'比赛详情'})
+  await match.getByText('等待赛果',{exact:true}).waitFor()
+  const url=p.url(),baseline=boardReads
+  const wake=()=>p.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')))
+  await Promise.all([p.waitForResponse(r=>r.url().endsWith('/batch.json')),wake()])
+  assert.equal(boardReads,baseline)
+  revision=1
+  await p.clock.runFor(45000)
+  await match.getByLabel('比分 2 比 1').waitFor()
+  offline=true
+  await wake()
+  await p.getByText(/暂时无法检查更新/).waitFor()
+  await match.getByLabel('比分 2 比 1').waitFor()
+  offline=false;revision=2
+  await wake()
+  await match.getByText('比分待核实',{exact:true}).waitFor()
+  assert.equal(await match.locator('.fan-score').count(),0)
+  revision=3
+  await wake()
+  await match.getByLabel('比分 1 比 1').waitFor()
+  assert.equal(p.url(),url)
+  assert.ok(markerReads>=4)
+  await p.getByTestId('back-to-fixtures').click()
+  assert.equal(await p.getByLabel('搜索球队',{exact:true}).inputValue(),'Chelsea')
+  await row(p,FOREST).getByLabel('比分 1 比 1').waitFor()
+})
 for(const width of [360,768,1440]) test('matchweek, forecast, results and permalink at '+width,async t=>{
   const p=await open(t,width)
   const requests=[];p.on('request',r=>requests.push(r.url()))

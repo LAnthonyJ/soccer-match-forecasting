@@ -22,3 +22,4 @@
 .ai-body button:disabled {cursor:default;opacity:.52}
 .ai-feedback {color:#783c24;font-size:13px;margin-top:5px}.ai-feedback .ai-link{color:inherit}
 @media(max-width:650px){.ai-panel{padding:11px 12px}.ai-prompts{gap:5px}.ai-entry{padding-inline:11px}}
+.ai-standings{max-width:100%;overflow-x:auto;margin-block:10px}.ai-standings table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}.ai-standings td,.ai-standings th{text-align:start;padding:4px;white-space:nowrap}.ai-turn>small{display:block}

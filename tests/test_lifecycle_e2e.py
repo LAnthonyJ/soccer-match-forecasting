@@ -1,5 +1,6 @@
 """Exercise both prospective cohorts through a real frozen model and an isolated issue."""
 import json
+import hashlib
 import math
 import os
 from datetime import datetime, timedelta, timezone
@@ -127,7 +128,17 @@ class LifecycleTest(unittest.TestCase):
             self.assertEqual({r["id"]:r["hash"] for r in rows},hashes)
             original_game = next(m for m in verified["fixtures"] if m["id"]==first["id"])
             self.assertEqual((original_game["hg"],original_game["ag"]),(1,1))
-            export_site(root/"site",snapshot_dir=corrected)
+            site = root/"site"
+            for batch in (initial, corrected):
+                export_site(site,snapshot_dir=batch)
+                public_bytes = (batch/snapshot.NAME).read_bytes()
+                digest = hashlib.sha256(public_bytes).hexdigest()
+                marker = json.loads((site/"batch.json").read_bytes())["batch_id"]
+                board = json.loads((site/"board.json").read_bytes())
+                self.assertEqual((marker,board["batch_id"]),(digest,digest))
+                self.assertEqual((site/"snapshots"/(digest+".json")).read_bytes(),public_bytes)
+            original_bytes = (initial/snapshot.NAME).read_bytes()
+            self.assertEqual((site/"snapshots"/(hashlib.sha256(original_bytes).hexdigest()+".json")).read_bytes(),original_bytes)
             dashboard = json.loads((root/"site/dashboard.json").read_bytes())
             published = dashboard["fixtures"]
             if not any(m["id"]==first["id"] for m in published):
@@ -135,6 +146,8 @@ class LifecycleTest(unittest.TestCase):
             fixture = next(m for m in published if m["id"]==first["id"])
             self.assertEqual(fixture["trace"]["score"],local["trace"]["score"])
             self.assertEqual(fixture["trace"]["hash"],hashes[first["id"]])
+            self.assertGreaterEqual(fixture["trace"]["score_processing_seconds"],0)
+            self.assertLessEqual(instant(fixture["trace"]["result_at"]),instant(fixture["trace"]["score_committed_at"]))
             scorecard = dashboard["report"]["pilot"]
             self.assertEqual((scorecard["independent"]["n_scored"],scorecard["n_pairs"]),(2,1))
             self.assertEqual(len(comments),3)

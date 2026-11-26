@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import { fmtTime, isStatic, labels, type Fixture } from './data'
-import { forecastLine, localZoneLabel } from './fanFixture'
-import { queryCatalog } from '../../cloudflare/lib/catalog.mjs'
+import { localZoneLabel } from './fanFixture'
+import { suggestedQuestions, answerFanQuestion, type QuestionContext, type FanAnswer } from '../../cloudflare/lib/fanqa.mjs'
 import './Analysis.css'
 
 type Fact = {id:string;tool:string;text:string;stage:string}
-type Packet = {fixture_id:string;as_of:string;fact_hash:string;facts:Fact[]}
+type Packet = {fixture_id:string;as_of:string;fact_hash:string;facts:Fact[];available_topics?:string[]}
 type Section = {title:string;text:string;fact_ids:string[]}
 type Report = {fixture_id:string;as_of:string;fact_hash:string;source:'template'|'deepseek';model?:string;
-  fallback_reason?:string;generated_at?:string;answer:string;sections:Section[]}
-type Turn = {question:string;answer:string;source:string;reason?:string;choices?:{id:string;label:string}[]}
+  fallback_reason?:string;generated_at?:string;answer:string;sections:Section[];available_topics?:string[]}
+type Turn = FanAnswer & {question:string;reason?:string;scope?:string}
 
 const notices:Record<string,string>={
   daily_limit:'今日的实时追问额度已用完。',monthly_budget:'本月 AI 额度已用完。',
@@ -23,12 +23,12 @@ function gateway() {
   return !isStatic() || document.querySelector('meta[name="analysis-mode"]')?.getAttribute('content')==='gateway'
 }
 async function json(path:string,signal:AbortSignal,options:RequestInit={}) {
-  const response=await fetch(path,{...options,signal})
+  const response=await fetch(path,{cache:'no-cache',...options,signal})
   if (!response.ok || !response.headers.get('content-type')?.includes('json')) throw new Error(String(response.status))
   return response.json()
 }
 function fromFacts(packet:Packet):Report {
-  const groups:[string,string[]][]=[['赛前判断',['probabilities','favourite']],['球队近况',['home_form','away_form','expected_goals']],
+  const groups:[string,string[]][]=[['赛前判断',['probabilities','favourite','top_scores']],['球队近况',['home_form','away_form','expected_goals']],
     ['市场对照',['market','market_gap','blended_gap']],['资料边界',['injuries']]]
   const sections=groups.flatMap(([title,keys])=>{
     const selected=keys.flatMap(k=>packet.facts.filter(f=>f.stage==='prematch'&&f.id===k))
@@ -36,15 +36,15 @@ function fromFacts(packet:Packet):Report {
   })
   return {...packet,source:'template',sections,answer:sections.map(s=>s.text).join('\n')}
 }
-async function staticPacket(f:Fixture,signal:AbortSignal):Promise<Packet> {
+async function staticPacket(id:string,signal:AbortSignal):Promise<Packet> {
   let data:Packet
-  try {data=await json('./analysis/facts/'+encodeURIComponent(f.id)+'.json',signal)}
+  try {data=await json('./analysis/facts/'+encodeURIComponent(id)+'.json',signal)}
   catch(err){
     if(signal.aborted) throw err
-    const season=await json('./analysis/archive/'+encodeURIComponent(f.season)+'.json',signal)
-    data=season[f.id]
+    const season=await json('./analysis/archive/'+encodeURIComponent(id.split('_')[0])+'.json',signal)
+    data=season[id]
   }
-  if(!data || data.fixture_id!==f.id || !Array.isArray(data.facts)) throw new Error('facts')
+  if(!data || data.fixture_id!==id || !Array.isArray(data.facts)) throw new Error('facts')
   return data
 }
 async function readReport(f:Fixture,signal:AbortSignal):Promise<Report> {
@@ -54,47 +54,50 @@ async function readReport(f:Fixture,signal:AbortSignal):Promise<Report> {
       if(report.fixture_id===f.id && Array.isArray(report.sections) && report.fact_hash) return report
     }catch(err){if(signal.aborted||!isStatic())throw err}
   }
-  const packet=await staticPacket(f,signal)
+  const packet=await staticPacket(f.id,signal)
   try {
     const index=await json('./analysis/reports/index.json',signal)
     if(index[f.id]===packet.fact_hash){
       const saved=await json('./analysis/reports/'+encodeURIComponent(f.id)+'.json',signal)
-      if(saved.source==='deepseek' && saved.fixture_id===f.id && saved.fact_hash===packet.fact_hash && Array.isArray(saved.sections))return saved
+      if(saved.source==='deepseek' && saved.fixture_id===f.id && saved.fact_hash===packet.fact_hash && Array.isArray(saved.sections))return {...saved,available_topics:packet.available_topics}
     }
   }catch(err){if(signal.aborted)throw err}
   return fromFacts(packet)
 }
 
 
-async function staticReply(packet:Packet,question:string,signal:AbortSignal):Promise<Turn> {
-  const lookup=await queryCatalog(question,new Date(),Intl.DateTimeFormat().resolvedOptions().timeZone,
-    ()=>json('./analysis/catalog.json',signal))
-  if(lookup)return {question,source:'template',answer:lookup.sections.map(s=>s.text).join(' ')||'赛程资料暂不可用。',choices:lookup.choices}
-  const topic = /伤|停赛|首发|阵容|injur|lineup/i.test(question) ? ['injuries']
-    : /市场|赔率|盘口|分歧/.test(question) ? ['market','market_gap']
-    : /截止|窗口|冻结时间/.test(question) ? ['protocol_cutoff']
-    : /几点|开球|何时|比赛时间/.test(question) ? ['kickoff']
-    : /预计进球|比分分布/.test(question) ? ['expected_goals','goals_comparison']
-    : /近.*(进球|进攻|攻防)|进球更多|进攻表现/.test(question) ? ['home_form','away_form']
-    : /近期|近况|状态/.test(question) ? ['home_form','away_form','form_comparison']
-    : /平局/.test(question) ? ['draw_margin','expected_goals']
-    : /接近|看好|概率|胜|预测|两队|赢|原因|为什么/.test(question) ? ['probabilities','favourite','goals_comparison']
-    : []
-  const answer=topic.flatMap(id=>packet.facts.filter(f=>f.id===id && f.stage==='prematch').map(f=>f.text)).join(' ')
-  return {question,source:'template',answer:answer || '当前资料无法回答这个问题。可以问本场胜平负概率、球队近况或市场比较。'}
+async function staticReply(packet:Packet,question:string,context:QuestionContext|undefined,signal:AbortSignal):Promise<Turn> {
+  const item=async(path:string,id:string)=>{
+    try{return (await json('./analysis/'+path+'.json',signal))[id]??null}
+    catch(err){if(!signal.aborted&&err instanceof Error&&err.message==='404')return null;throw err}
+  }
+  const reply=await answerFanQuestion({packet,question,context,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,
+    loadPacket:id=>staticPacket(id,signal),loadCatalog:()=>json('./analysis/catalog.json',signal),
+    loadHistory:(id,scope)=>{const [year,home]=id.split('_');return item('team-history/'+year+'/'+scope+'/'+home,id)},
+    loadReview:id=>item('reviews/'+id.split('_')[0],id)})
+  return {...reply,question}
 }
 
+function evidenceUrl(t:Turn){
+  const fid=encodeURIComponent(t.answer_fixture_id)
+  const [season,home]=fid.split('_')
+  if(t.scope)return isStatic()?'./analysis/team-history/'+season+'/'+t.scope+'/'+home+'.json':'/api/matches/'+fid+'/team-history?'+new URLSearchParams({scope:t.scope,as_of:t.as_of})
+  if(t.topic==='model_results')return './#/report'
+  if(['review','score','result'].includes(t.topic))return isStatic()?'./analysis/reviews/'+season+'.json':'/api/fixtures/'+fid
+  if(t.topic==='schedule' && isStatic())return './analysis/catalog.json'
+  return './analysis-evidence.html?fixture='+fid
+}
 function localAnswerTime(text:string) {
   const iso=/\b\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|\+00:00)\b/g
   if(!iso.test(text))return text
   const local=text.replace(iso,time=>fmtTime(time))
   return local.includes('UTC')?local.replaceAll('UTC',localZoneLabel()):local+'（'+localZoneLabel()+'）'
 }
-export function AnalysisPanel({f,startOpen=false}:{f:Fixture;startOpen?:boolean}) {
-  return <FixtureAnalysis key={f.id} f={f} startOpen={startOpen}/>
+export function AnalysisPanel({f,startOpen=false,batchId}:{f:Fixture;startOpen?:boolean;batchId?:string}) {
+  return <FixtureAnalysis key={f.id} f={f} startOpen={startOpen} batchId={batchId}/>
 }
 
-function FixtureAnalysis({f,startOpen}:{f:Fixture;startOpen:boolean}) {
+function FixtureAnalysis({f,startOpen,batchId}:{f:Fixture;startOpen:boolean;batchId?:string}) {
   const [tab,setTab]=useState<'report'|'ask'|null>(startOpen?'report':null)
   const [requested,setRequested]=useState(startOpen),[report,setReport]=useState<Report|null>(null)
   const [retry,setRetry]=useState(0),[loadFailed,setLoadFailed]=useState(false)
@@ -116,7 +119,7 @@ function FixtureAnalysis({f,startOpen}:{f:Fixture;startOpen:boolean}) {
       setReport(next);setRefresh(false)
     }).catch(()=>{if(!c.signal.aborted)setLoadFailed(true)})
     return ()=>{c.abort();askControl.current?.abort()}
-  },[requested,retry,f.id,f.trace?.revision,f.prediction?.source])
+  },[requested,retry,f.id,f.trace?.revision,f.prediction?.source,batchId])
   useEffect(()=>{
     if(tab==='ask' && report && focusWanted.current){
       input.current?.focus({preventScroll:true});focusWanted.current=false
@@ -126,41 +129,43 @@ function FixtureAnalysis({f,startOpen}:{f:Fixture;startOpen:boolean}) {
     setRequested(true);setTab(tab===view?null:view)
     focusWanted.current=tab!==view && view==='ask'
   }
-  async function ask(text:string){
+  async function ask(text:string,chosen?:QuestionContext){
     const q=text.trim()
     if(!q||!report||sending||refresh)return
     askControl.current?.abort()
     const c=new AbortController();askControl.current=c
     setQuestion(q);setSending(true);setAskError('')
     try{
+      const last=turns.at(-1)
+      const context=chosen || (last?.answer_fixture_id&&!last.needs_choice?{fixture_id:last.answer_fixture_id,topic:last.topic,fact_hash:last.answer_fact_hash}:undefined)
       let turn:Turn
       if(gateway()){
         const history=turns.slice(-3).flatMap(t=>[{role:'user',content:t.question},{role:'assistant',content:t.answer.slice(0,500)}])
         const reply=await json('/api/analysis/ask',c.signal,{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({fixture_id:f.id,fact_hash:report.fact_hash,question:q,history,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone})})
+          body:JSON.stringify({fixture_id:f.id,fact_hash:report.fact_hash,question:q,history,context,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone})})
         if(reply.fact_hash!==report.fact_hash || reply.fixture_id!==f.id)throw new Error('409')
         if(typeof reply.answer!=='string'||!reply.answer)throw new Error('empty')
-        turn={question:q,answer:reply.answer,source:reply.source,reason:reply.fallback_reason,choices:reply.choices}
+        turn={...reply,question:q,reason:reply.fallback_reason}
       }else{
-        const packet=await staticPacket(f,c.signal)
+        const packet=await staticPacket(f.id,c.signal)
         if(packet.fact_hash!==report.fact_hash)throw new Error('409')
-        turn=await staticReply(packet,q,c.signal)
+        turn=await staticReply(packet,q,context,c.signal)
       }
       if(!c.signal.aborted){setTurns(items=>[...items,turn].slice(-6));setQuestion('')}
     }catch(err){
       if(!c.signal.aborted){
         const status=err instanceof Error?err.message:''
-        if(status==='409'){setRefresh(true);setAskError('本场资料已更新，请读取新版再发送。')}
+        if(status==='409'){setTurns([]);setRefresh(true);setAskError('本场资料已更新，请读取新版再发送。')}
         else setAskError(status==='429'?'当前追问额度已用完，原问题已保留。':'追问暂时未送达，原问题已保留。')
       }
     }finally{if(!c.signal.aborted)setSending(false)}
   }
-  const form=f.prediction?.form
-  const suggestions=[forecastLine(f,true)==='两队接近'?'两队为什么这么接近？':'这场更看好谁？',
-    form?.home&&form?.away?'两队近期的进攻表现如何？':'本场预计进球是多少？',f.prediction?.market?'市场也这么看吗？':'这场有伤停消息吗？']
+  const suggestionFacts=report?.available_topics?.map(id=>({id,text:''})) ??
+    (report?.sections||[]).flatMap(section=>section.fact_ids.map(id=>({id,text:section.text})))
+  const suggestions=suggestedQuestions(suggestionFacts)
   return <section className="ai-panel" aria-label="赛事分析">
     <div className="ai-actions">
-      <button type="button" className="ai-entry" aria-expanded={tab==='report'} onClick={()=>show('report')}>{tab==='report'?'收起分析':'展开分析'}<span aria-hidden="true">{tab==='report'?'−':'＋'}</span></button>
+      <button type="button" className="ai-entry" aria-expanded={tab==='report'} onClick={()=>show('report')}>{tab==='report'?'收起分析':report?.source==='deepseek'?'AI 赛前分析':'赛前分析'}<span aria-hidden="true">{tab==='report'?'−':'＋'}</span></button>
       <button type="button" className="ai-entry ai-ask-toggle" aria-expanded={tab==='ask'} onClick={()=>show('ask')}>问这场<span aria-hidden="true">↗</span></button>
     </div>
     {tab&&<div className="ai-body">
@@ -176,10 +181,17 @@ function FixtureAnalysis({f,startOpen}:{f:Fixture;startOpen:boolean}) {
       {report&&tab==='ask'&&<>
         <h3>关于这场比赛</h3>
         {updateNote&&<p role="status" className="ai-date">{updateNote}</p>}
-        <div className="ai-prompts">{suggestions.map(q=><button disabled={sending||refresh} key={q} onClick={()=>void ask(q)}>{q}</button>)}</div>
-        <div aria-live="polite">{turns.map((t,i)=><div key={i} className="ai-turn"><b>{t.question}</b>
-          <p>{localAnswerTime(t.answer)}</p><small>{t.source==='deepseek'?'AI 生成':'基础数据解读'} {t.reason&&notices[t.reason]}</small>
-          {t.choices?.map(c=><p key={c.id}><a className="ai-link" href={'#/match/'+encodeURIComponent(c.id)}>{localAnswerTime(c.label)}</a></p>)}</div>)}</div>
+        <div className="ai-prompts">{suggestions.map(q=><button disabled={sending||refresh} key={q} onClick={()=>void ask(q,{fixture_id:f.id,topic:'',fact_hash:report.fact_hash})}>{q}</button>)}</div>
+        <div aria-live="polite">{turns.map((t,i)=><div key={i} className="ai-turn" data-answer-fixture-id={t.answer_fixture_id} data-as-of={t.as_of} data-topic={t.topic} data-missing-reason={t.missing_reason||undefined}><b>{t.question}</b>
+          <small>{t.fixture_label} {t.answer_fixture_id!==f.id&&localAnswerTime(t.answer_kickoff||'')}</small>
+          <small>资料截至 {fmtTime(t.as_of)} {localZoneLabel()}</small>
+          <p>{localAnswerTime(t.answer)}</p>
+          {t.standings&&<div className="ai-standings" tabIndex={0}><table aria-label="按已确认比分计算的积分榜"><thead><tr>{['名次','球队','场','胜','平','负','进','失','积分'].map(h=><th key={h}>{h}</th>)}</tr></thead>
+            <tbody>{t.standings.map(row=><tr key={row.team}><td>{row.rank}</td><th scope="row">{row.team_zh}</th>
+              {[row.played,row.wins,row.draws,row.losses,row.gf,row.ga,row.points].map((v,j)=><td key={j}>{v}</td>)}</tr>)}</tbody></table></div>}
+          {!!t.evidence?.length&&<small>依据 <a href={evidenceUrl(t)}>核对资料</a></small>}
+          {t.answer_fixture_id!==f.id&&t.answer_fixture_id&&<a className="ai-link" href={'#/match/'+encodeURIComponent(t.answer_fixture_id)}>打开这场比赛 ↗</a>}<small>{t.source==='deepseek'?'AI 生成':'基础数据解读'} {t.reason&&notices[t.reason]}</small>
+          {t.choices?.map(c=><p key={c.id}><>{t.needs_choice?<button type="button" className="ai-link" disabled={sending||refresh} onClick={()=>void ask("那场几点开球？",{fixture_id:c.id,topic:"schedule"})}>{localAnswerTime(c.label)}</button>:<a className="ai-link" href={'#/match/'+encodeURIComponent(c.id)}>{localAnswerTime(c.label)}</a>}</></p>)}</div>)}</div>
         <form onSubmit={e=>{e.preventDefault();void ask(question)}}><label>关于这场比赛的提问
           <input ref={input} maxLength={350} readOnly={sending} value={question} onChange={e=>{setQuestion(e.target.value);if(!refresh)setAskError('')}} placeholder="例如：平局的机会有多大？"/></label>
           <button disabled={sending||refresh||!question.trim()}>{sending?'分析中…':'发送'}</button></form>
