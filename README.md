@@ -1,4 +1,4 @@
-# World Cup Forecasts
+# Soccer Match Forecasting
 
 Estimate the outcome of an international football match from the command line, or explore scheduled fixtures in the mobile web app. Each forecast includes win, draw and loss probabilities, expected goals and likely scorelines.
 
